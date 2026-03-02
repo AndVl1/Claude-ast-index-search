@@ -1,4 +1,4 @@
-# ast-index v3.24.0
+# ast-index v3.25.0
 
 Fast code search CLI for 23 programming languages. Native Rust implementation.
 
@@ -336,6 +336,13 @@ ios_asset_usages (id, asset_id, usage_file, usage_line, usage_type)
 ```
 
 ## Changelog
+
+### 3.25.0
+- **Fix BSL parser ABI** — regenerate parser.c with ABI 15 for tree-sitter 0.26 compatibility (BSL tests were silently failing since v3.24.0)
+- **Fix BSL keyword priority** — identifier token lowered to `prec(-1)` so keywords like `Процедура`/`Procedure` are recognized correctly
+- **Ruby nested scope tracking** — qualified names for nested class/module definitions (e.g. `Event::CreateService`, `Api::V2::UsersController`) (contributed by @melnik0v)
+- Remove local config files and mobile-tools from repo
+- 462 total tests
 
 ### 3.24.0
 - **BSL parser: all 7 issues fixed** — complete overhaul of 1C:Enterprise BSL parser per official 8.3.27 documentation
