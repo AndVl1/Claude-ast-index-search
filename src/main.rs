@@ -288,8 +288,11 @@ enum Commands {
     },
     /// Find symbols (classes, interfaces, functions)
     Symbol {
-        /// Symbol name
-        name: String,
+        /// Symbol name (exact match; omit when using --pattern)
+        name: Option<String>,
+        /// Glob pattern for symbol name (e.g. "*Mailer", "*Email*Service*")
+        #[arg(long, short = 'p')]
+        pattern: Option<String>,
         /// Symbol type: class, interface, function, property
         #[arg(long, short = 't')]
         r#type: Option<String>,
@@ -308,8 +311,11 @@ enum Commands {
     },
     /// Find class or interface
     Class {
-        /// Class name
-        name: String,
+        /// Class name (exact match; omit when using --pattern)
+        name: Option<String>,
+        /// Glob pattern for class name (e.g. "*Mailer", "*Email*Service*")
+        #[arg(long, short = 'p')]
+        pattern: Option<String>,
         /// Max results
         #[arg(short, long, default_value = "20")]
         limit: usize,
@@ -680,13 +686,13 @@ fn main() -> Result<()> {
             let scope = db::SearchScope { in_file: in_file.as_deref(), module: module.as_deref(), dir_prefix: dir_prefix_ref };
             commands::index::cmd_search(&root, &query, limit, format, &scope, fuzzy)
         }
-        Commands::Symbol { name, r#type, limit, in_file, module, fuzzy } => {
+        Commands::Symbol { name, pattern, r#type, limit, in_file, module, fuzzy } => {
             let scope = db::SearchScope { in_file: in_file.as_deref(), module: module.as_deref(), dir_prefix: dir_prefix_ref };
-            commands::index::cmd_symbol(&root, &name, r#type.as_deref(), limit, format, &scope, fuzzy)
+            commands::index::cmd_symbol(&root, name.as_deref(), pattern.as_deref(), r#type.as_deref(), limit, format, &scope, fuzzy)
         }
-        Commands::Class { name, limit, in_file, module, fuzzy } => {
+        Commands::Class { name, pattern, limit, in_file, module, fuzzy } => {
             let scope = db::SearchScope { in_file: in_file.as_deref(), module: module.as_deref(), dir_prefix: dir_prefix_ref };
-            commands::index::cmd_class(&root, &name, limit, format, &scope, fuzzy)
+            commands::index::cmd_class(&root, name.as_deref(), pattern.as_deref(), limit, format, &scope, fuzzy)
         }
         Commands::Implementations { parent, limit, in_file, module } => {
             let scope = db::SearchScope { in_file: in_file.as_deref(), module: module.as_deref(), dir_prefix: dir_prefix_ref };

@@ -669,6 +669,130 @@ pub fn find_class_like(
     Ok(results)
 }
 
+/// Convert glob pattern to SQL LIKE pattern: * → %, ? → _
+pub fn glob_to_like(pattern: &str) -> String {
+    let mut result = String::with_capacity(pattern.len() + 4);
+    for ch in pattern.chars() {
+        match ch {
+            '*' => result.push('%'),
+            '?' => result.push('_'),
+            '%' => { result.push_str("\\%"); }
+            '_' => { result.push_str("\\_"); }
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
+/// Find class-like symbols matching a glob pattern
+pub fn find_class_like_pattern(
+    conn: &Connection,
+    like_pattern: &str,
+    limit: usize,
+    scope: &SearchScope,
+) -> Result<Vec<SearchResult>> {
+    let (scope_clause, scope_params) = scope.path_condition();
+
+    let sql = format!(
+        r#"
+        SELECT s.name, s.kind, s.line, s.signature, f.path
+        FROM symbols s
+        JOIN files f ON s.file_id = f.id
+        WHERE s.name LIKE ?1 ESCAPE '\' AND s.kind IN ('class', 'interface', 'object', 'enum', 'protocol', 'struct', 'actor', 'package'){}
+        ORDER BY length(s.name), s.name
+        LIMIT ?{}
+        "#,
+        scope_clause,
+        2 + scope_params.len()
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    all_params.push(Box::new(like_pattern.to_string()));
+    for p in &scope_params {
+        all_params.push(Box::new(p.clone()));
+    }
+    all_params.push(Box::new(limit as i64));
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = all_params.iter().map(|p| p.as_ref()).collect();
+    let results = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok(SearchResult {
+                name: row.get(0)?,
+                kind: row.get(1)?,
+                line: row.get(2)?,
+                signature: row.get(3)?,
+                path: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(results)
+}
+
+/// Find symbols matching a glob pattern with optional kind filter
+pub fn find_symbols_by_pattern(
+    conn: &Connection,
+    like_pattern: &str,
+    kind: Option<&str>,
+    limit: usize,
+    scope: &SearchScope,
+) -> Result<Vec<SearchResult>> {
+    let (scope_clause, scope_params) = scope.path_condition();
+
+    let kind_clause = if kind.is_some() {
+        format!(" AND s.kind = ?{}", 2 + scope_params.len())
+    } else {
+        String::new()
+    };
+
+    let limit_idx = if kind.is_some() {
+        3 + scope_params.len()
+    } else {
+        2 + scope_params.len()
+    };
+
+    let sql = format!(
+        r#"
+        SELECT s.name, s.kind, s.line, s.signature, f.path
+        FROM symbols s
+        JOIN files f ON s.file_id = f.id
+        WHERE s.name LIKE ?1 ESCAPE '\'{}{}
+        ORDER BY length(s.name), s.name
+        LIMIT ?{}
+        "#,
+        scope_clause,
+        kind_clause,
+        limit_idx
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    all_params.push(Box::new(like_pattern.to_string()));
+    for p in &scope_params {
+        all_params.push(Box::new(p.clone()));
+    }
+    if let Some(k) = kind {
+        all_params.push(Box::new(k.to_string()));
+    }
+    all_params.push(Box::new(limit as i64));
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = all_params.iter().map(|p| p.as_ref()).collect();
+    let results = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok(SearchResult {
+                name: row.get(0)?,
+                kind: row.get(1)?,
+                line: row.get(2)?,
+                signature: row.get(3)?,
+                path: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(results)
+}
+
 /// Find implementations (subclasses/implementors)
 pub fn find_implementations(
     conn: &Connection,
@@ -1371,5 +1495,54 @@ mod tests {
         let conn = create_test_db();
         let count = count_refs(&conn).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_glob_to_like() {
+        assert_eq!(glob_to_like("*Mailer"), "%Mailer");
+        assert_eq!(glob_to_like("*Email*Service*"), "%Email%Service%");
+        assert_eq!(glob_to_like("User?"), "User_");
+        assert_eq!(glob_to_like("exact"), "exact");
+        // Existing SQL wildcards should be escaped
+        assert_eq!(glob_to_like("100%"), "100\\%");
+        assert_eq!(glob_to_like("a_b"), "a\\_b");
+    }
+
+    #[test]
+    fn test_find_class_like_pattern() {
+        let conn = create_test_db();
+        let file_id = upsert_file(&conn, "app/mailers/user_mailer.rb", 1000, 100).unwrap();
+        insert_symbol(&conn, file_id, "UserMailer", SymbolKind::Class, 1, Some("class UserMailer")).unwrap();
+        insert_symbol(&conn, file_id, "AdminMailer", SymbolKind::Class, 10, Some("class AdminMailer")).unwrap();
+        insert_symbol(&conn, file_id, "MailerHelper", SymbolKind::Package, 20, Some("module MailerHelper")).unwrap();
+
+        let scope = SearchScope::none();
+        // Glob: *Mailer → %Mailer
+        let results = find_class_like_pattern(&conn, "%Mailer", 10, &scope).unwrap();
+        assert_eq!(results.len(), 2, "should match UserMailer and AdminMailer: {:?}", results.iter().map(|r| &r.name).collect::<Vec<_>>());
+        // MailerHelper is a package, should also match class-like kinds
+        let results = find_class_like_pattern(&conn, "%Mailer%", 10, &scope).unwrap();
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_find_symbols_by_pattern() {
+        let conn = create_test_db();
+        let file_id = upsert_file(&conn, "app/services/email_service.rb", 1000, 100).unwrap();
+        insert_symbol(&conn, file_id, "EmailService", SymbolKind::Class, 1, Some("class EmailService")).unwrap();
+        insert_symbol(&conn, file_id, "send_email", SymbolKind::Function, 10, Some("def send_email")).unwrap();
+        insert_symbol(&conn, file_id, "EmailValidator", SymbolKind::Class, 20, Some("class EmailValidator")).unwrap();
+
+        let scope = SearchScope::none();
+        // All symbols matching *Email*
+        let results = find_symbols_by_pattern(&conn, "%Email%", None, 10, &scope).unwrap();
+        assert_eq!(results.len(), 3);
+        // Only classes
+        let results = find_symbols_by_pattern(&conn, "%Email%", Some("class"), 10, &scope).unwrap();
+        assert_eq!(results.len(), 2);
+        // Only functions
+        let results = find_symbols_by_pattern(&conn, "%email%", Some("function"), 10, &scope).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "send_email");
     }
 }

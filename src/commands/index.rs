@@ -143,8 +143,8 @@ pub fn cmd_search(root: &Path, query: &str, limit: usize, format: &str, scope: &
     Ok(())
 }
 
-/// Find symbol by name
-pub fn cmd_symbol(root: &Path, name: &str, kind: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
+/// Find symbol by name or glob pattern
+pub fn cmd_symbol(root: &Path, name: Option<&str>, pattern: Option<&str>, kind: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
     let start = Instant::now();
 
     if !db::db_exists(root) {
@@ -155,11 +155,22 @@ pub fn cmd_symbol(root: &Path, name: &str, kind: Option<&str>, limit: usize, for
         return Ok(());
     }
 
+    if name.is_none() && pattern.is_none() {
+        println!("{}", "Either a symbol name or --pattern is required.".red());
+        return Ok(());
+    }
+
     let conn = db::open_db(root)?;
-    let symbols = if fuzzy && kind.is_none() {
-        db::search_symbols_fuzzy(&conn, name, limit)?
+    let symbols = if let Some(pat) = pattern {
+        let like_pattern = db::glob_to_like(pat);
+        db::find_symbols_by_pattern(&conn, &like_pattern, kind, limit, scope)?
     } else {
-        db::find_symbols_by_name_scoped(&conn, name, kind, limit, scope)?
+        let name = name.unwrap();
+        if fuzzy && kind.is_none() {
+            db::search_symbols_fuzzy(&conn, name, limit)?
+        } else {
+            db::find_symbols_by_name_scoped(&conn, name, kind, limit, scope)?
+        }
     };
 
     if format == "json" {
@@ -167,10 +178,11 @@ pub fn cmd_symbol(root: &Path, name: &str, kind: Option<&str>, limit: usize, for
         return Ok(());
     }
 
+    let query_str = pattern.unwrap_or(name.unwrap_or(""));
     let kind_str = kind.map(|k| format!(" ({})", k)).unwrap_or_default();
     println!(
         "{}",
-        format!("Symbols matching '{}'{}:", name, kind_str).bold()
+        format!("Symbols matching '{}'{}:", query_str, kind_str).bold()
     );
 
     for s in &symbols {
@@ -189,8 +201,8 @@ pub fn cmd_symbol(root: &Path, name: &str, kind: Option<&str>, limit: usize, for
     Ok(())
 }
 
-/// Find class by name (classes, interfaces, objects, enums)
-pub fn cmd_class(root: &Path, name: &str, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
+/// Find class by name or glob pattern (classes, interfaces, objects, enums)
+pub fn cmd_class(root: &Path, name: Option<&str>, pattern: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
     let start = Instant::now();
 
     if !db::db_exists(root) {
@@ -201,18 +213,27 @@ pub fn cmd_class(root: &Path, name: &str, limit: usize, format: &str, scope: &Se
         return Ok(());
     }
 
+    if name.is_none() && pattern.is_none() {
+        println!("{}", "Either a class name or --pattern is required.".red());
+        return Ok(());
+    }
+
     let conn = db::open_db(root)?;
 
-    // Single query for all class-like symbols
-    let results = if fuzzy {
-        // Fuzzy: search all symbols then filter to class-like kinds
-        let all = db::search_symbols_fuzzy(&conn, name, limit * 5)?;
-        all.into_iter()
-            .filter(|s| matches!(s.kind.as_str(), "class" | "interface" | "object" | "enum" | "protocol" | "struct" | "actor" | "package"))
-            .take(limit)
-            .collect()
+    let results = if let Some(pat) = pattern {
+        let like_pattern = db::glob_to_like(pat);
+        db::find_class_like_pattern(&conn, &like_pattern, limit, scope)?
     } else {
-        db::find_class_like_scoped(&conn, name, limit, scope)?
+        let name = name.unwrap();
+        if fuzzy {
+            let all = db::search_symbols_fuzzy(&conn, name, limit * 5)?;
+            all.into_iter()
+                .filter(|s| matches!(s.kind.as_str(), "class" | "interface" | "object" | "enum" | "protocol" | "struct" | "actor" | "package"))
+                .take(limit)
+                .collect()
+        } else {
+            db::find_class_like_scoped(&conn, name, limit, scope)?
+        }
     };
 
     if format == "json" {
@@ -220,7 +241,8 @@ pub fn cmd_class(root: &Path, name: &str, limit: usize, format: &str, scope: &Se
         return Ok(());
     }
 
-    println!("{}", format!("Classes matching '{}':", name).bold());
+    let query_str = pattern.unwrap_or(name.unwrap_or(""));
+    println!("{}", format!("Classes matching '{}':", query_str).bold());
 
     for s in &results {
         println!("  {} [{}]: {}:{}", s.name.cyan(), s.kind, s.path, s.line);
