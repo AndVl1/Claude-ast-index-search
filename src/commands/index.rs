@@ -378,7 +378,7 @@ pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str) -> Result
 }
 
 /// Show class hierarchy (parents and children)
-pub fn cmd_hierarchy(root: &Path, name: &str) -> Result<()> {
+pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()> {
     let start = Instant::now();
 
     if !db::db_exists(root) {
@@ -421,12 +421,28 @@ pub fn cmd_hierarchy(root: &Path, name: &str) -> Result<()> {
         }
     }
 
-    // Find children
-    let children = db::find_implementations(&conn, name, 20)?;
+    // Find children (with optional scope filtering)
+    let children = if scope.is_empty() {
+        db::find_implementations(&conn, name, 50)?
+    } else {
+        let all = db::find_implementations(&conn, name, 200)?;
+        all.into_iter().filter(|s| {
+            if let Some(in_file) = scope.in_file {
+                if !s.path.contains(in_file) { return false; }
+            }
+            if let Some(module) = scope.module {
+                if !s.path.starts_with(module) { return false; }
+            }
+            if let Some(prefix) = scope.dir_prefix {
+                if !s.path.starts_with(prefix) { return false; }
+            }
+            true
+        }).collect()
+    };
     if !children.is_empty() {
         println!("\n  {}", "Children:".cyan());
         for c in &children {
-            println!("    {} [{}]", c.name, c.kind);
+            println!("    {} [{}]: {}", c.name, c.kind, c.path);
         }
     }
 

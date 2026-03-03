@@ -350,6 +350,12 @@ enum Commands {
     Hierarchy {
         /// Class name
         name: String,
+        /// Filter children by file path
+        #[arg(long)]
+        in_file: Option<String>,
+        /// Filter children by module path
+        #[arg(long)]
+        module: Option<String>,
     },
     /// Find modules
     Module {
@@ -702,7 +708,10 @@ fn main() -> Result<()> {
             commands::index::cmd_implementations(&root, &parent, limit, format, &scope)
         }
         Commands::Refs { symbol, limit } => commands::index::cmd_refs(&root, &symbol, limit, format),
-        Commands::Hierarchy { name } => commands::index::cmd_hierarchy(&root, &name),
+        Commands::Hierarchy { name, in_file, module } => {
+            let scope = db::SearchScope { in_file: in_file.as_deref(), module: module.as_deref(), dir_prefix: dir_prefix_ref };
+            commands::index::cmd_hierarchy(&root, &name, &scope)
+        }
         Commands::Usages { symbol, limit, in_file, module } => {
             let scope = db::SearchScope { in_file: in_file.as_deref(), module: module.as_deref(), dir_prefix: dir_prefix_ref };
             commands::index::cmd_usages(&root, &symbol, limit, format, &scope)
