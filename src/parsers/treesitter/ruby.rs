@@ -213,9 +213,15 @@ impl LanguageParser for RubyParser {
                     // Rails callbacks
                     "before_action" | "after_action" | "around_action"
                     | "before_create" | "after_create"
+                    | "before_update" | "after_update"
                     | "before_save" | "after_save"
                     | "before_destroy" | "after_destroy"
                     | "before_validation" | "after_validation"
+                    | "after_commit" | "after_create_commit"
+                    | "after_update_commit" | "after_destroy_commit"
+                    | "after_save_commit" | "after_rollback"
+                    | "around_create" | "around_update"
+                    | "around_save" | "around_destroy"
                         if !has_receiver =>
                     {
                         if let Some(arg) = first_arg {
@@ -567,10 +573,13 @@ end
 
     #[test]
     fn test_parse_rails_callbacks() {
-        let content = "class Post < ApplicationRecord\n  before_save :normalize_title\n  after_create :notify_subscribers\nend\n";
+        let content = "class Post < ApplicationRecord\n  before_save :normalize_title\n  after_create :notify_subscribers\n  after_commit :sync_to_calendar\n  after_update_commit :refresh_cache\n  around_save :wrap_in_transaction\nend\n";
         let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
         assert!(symbols.iter().any(|s| s.name == "before_save :normalize_title" && s.kind == SymbolKind::Annotation));
         assert!(symbols.iter().any(|s| s.name == "after_create :notify_subscribers" && s.kind == SymbolKind::Annotation));
+        assert!(symbols.iter().any(|s| s.name == "after_commit :sync_to_calendar" && s.kind == SymbolKind::Annotation));
+        assert!(symbols.iter().any(|s| s.name == "after_update_commit :refresh_cache" && s.kind == SymbolKind::Annotation));
+        assert!(symbols.iter().any(|s| s.name == "around_save :wrap_in_transaction" && s.kind == SymbolKind::Annotation));
     }
 
     #[test]
