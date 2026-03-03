@@ -948,6 +948,20 @@ mod tests {
         assert!(matches(&pat, "  await syncQueue.addAction(action)"));
     }
 
+    #[test]
+    fn test_caller_pattern_same_file_calls() {
+        // Common Pinia store / composable pattern: functions calling each other
+        let pat = build_caller_pattern("loadFromDB");
+        // Bare call (no await)
+        assert!(matches(&pat, "    loadFromDB()"));
+        // Await call (most common in stores)
+        assert!(matches(&pat, "    await loadFromDB()"));
+        // Definition line should NOT match
+        assert!(!matches(&pat, "  const loadFromDB = async () => {"));
+        // Return call
+        assert!(matches(&pat, "    return loadFromDB()"));
+    }
+
     // --- build_def_skip_pattern tests ---
 
     #[test]
