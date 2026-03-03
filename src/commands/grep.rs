@@ -26,7 +26,7 @@ use regex::Regex;
 use super::{search_files_limited, relative_path};
 
 /// Supported file extensions for callers/call-tree commands
-const CALLER_EXTENSIONS: [&str; 9] = ["kt", "java", "swift", "m", "h", "pm", "pl", "t", "rb"];
+const CALLER_EXTENSIONS: [&str; 15] = ["kt", "java", "swift", "m", "h", "pm", "pl", "t", "rb", "ts", "tsx", "js", "jsx", "vue", "svelte"];
 
 /// Trailing word boundary: `\b` for normal names, empty for Ruby bang/question methods
 fn trailing_boundary(function_name: &str) -> &str {
@@ -87,7 +87,7 @@ pub fn cmd_todo(root: &Path, pattern: &str, limit: usize) -> Result<()> {
 
     let mut count = 0;
 
-    search_files_limited(root, &search_pattern, &["kt", "java", "swift", "m", "h", "pm", "pl", "t"], limit, |path, line_num, line| {
+    search_files_limited(root, &search_pattern, &["kt", "java", "swift", "m", "h", "pm", "pl", "t", "rb", "ts", "tsx", "js", "jsx", "vue", "svelte"], limit, |path, line_num, line| {
 
         let rel_path = relative_path(root, path);
         let content: String = line.chars().take(80).collect();
@@ -217,13 +217,14 @@ fn find_caller_functions(root: &Path, function_name: &str, limit: usize) -> Resu
     let def_pattern = build_def_skip_pattern(function_name);
 
     // Pattern to find function definitions (for locating the containing function)
-    // Group 1: fun/func/sub style, Group 2: Ruby def/def self., Group 3: Java return-type style
+    // Group 1: fun/func/function/def/sub style, Group 2: Ruby def/def self., Group 3: Java return-type style, Group 4: TS arrow function
     let func_def_re = Regex::new(
         concat!(
-            r"(?:fun|func|sub)\s+(\w+)\s*[<(\[]",
+            r"(?:fun|function|func|sub)\s+(\w+)\s*[<(\[]",
             r"|\bdef\s+(?:self\.)?(\w[!\w?]*)",
-            r"|(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*",
+            r"|(?:(?:public|private|protected|static|final|abstract|synchronized|override|export|async)\s+)*",
             r"(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{;]*>)?(?:\[\])*)\s+(\w+)\s*\(",
+            r"|(?:const|let)\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[a-zA-Z_]\w*)\s*(?::\s*[^=]+)?\s*=>",
         )
     )?;
 
@@ -273,8 +274,8 @@ fn find_containing_function(lines: &[&str], target_line: usize, func_def_re: &Re
     for i in (0..=start_idx).rev() {
         let line = lines[i];
         if let Some(caps) = func_def_re.captures(line) {
-            // Group 1: fun/func/sub, Group 2: Ruby def, Group 3: Java return-type
-            if let Some(name) = caps.get(1).or_else(|| caps.get(2)).or_else(|| caps.get(3)) {
+            // Group 1: fun/function/func/sub, Group 2: Ruby def, Group 3: Java return-type, Group 4: TS arrow
+            if let Some(name) = caps.get(1).or_else(|| caps.get(2)).or_else(|| caps.get(3)).or_else(|| caps.get(4)) {
                 return Some((name.as_str().to_string(), i + 1));
             }
         }

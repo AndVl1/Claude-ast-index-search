@@ -207,6 +207,9 @@ impl LanguageParser for TypeScriptParser {
         // Ambient const captures (declare const without value)
         let idx_export_ambient_const_name = idx("export_ambient_const_name");
 
+        // Export default captures
+        let idx_export_default_value = idx("export_default_value");
+
         // Import captures
         let idx_import_source = idx("import_source");
 
@@ -649,6 +652,61 @@ impl LanguageParser for TypeScriptParser {
                 continue;
             }
 
+            // === Export default ===
+
+            if let Some(val_cap) = find_capture(m, idx_export_default_value) {
+                let node = &val_cap.node;
+                let line = node_line(node);
+                let sig = line_text(content, line).trim().to_string();
+
+                match node.kind() {
+                    // export default identifier;
+                    "identifier" => {
+                        let name = node_text(content, node);
+                        if emitted_lines.insert((format!("default({})", name), line)) {
+                            symbols.push(ParsedSymbol {
+                                name: format!("default({})", name),
+                                kind: SymbolKind::Object,
+                                line,
+                                signature: sig,
+                                parents: vec![],
+                            });
+                        }
+                    }
+                    // export default { ... }
+                    "object" => {
+                        if emitted_lines.insert(("default".to_string(), line)) {
+                            symbols.push(ParsedSymbol {
+                                name: "default".to_string(),
+                                kind: SymbolKind::Object,
+                                line,
+                                signature: sig,
+                                parents: vec![],
+                            });
+                        }
+                    }
+                    // export default someCall(...) or export default defineComponent(...)
+                    "call_expression" => {
+                        if let Some(func_node) = node.child_by_field_name("function") {
+                            let name = node_text(content, &func_node);
+                            if emitted_lines.insert((name.to_string(), line)) {
+                                symbols.push(ParsedSymbol {
+                                    name: name.to_string(),
+                                    kind: SymbolKind::Function,
+                                    line,
+                                    signature: sig,
+                                    parents: vec![],
+                                });
+                            }
+                        }
+                    }
+                    // export default function name() {} or export default class Name {}
+                    // These are already caught by other patterns
+                    _ => {}
+                }
+                continue;
+            }
+
             // === Abstract methods ===
 
             if emit_class_member(content, m, idx_abstract_method_name, idx_abstract_method_node, SymbolKind::Function, &mut symbols, &mut emitted_lines) {
@@ -927,6 +985,30 @@ declare function internalHelper(): void;
         assert!(symbols.iter().any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Constant));
         // declare namespace
         assert!(symbols.iter().any(|s| s.name == "Utils" && s.kind == SymbolKind::Package));
+    }
+
+    #[test]
+    fn test_parse_export_default_identifier() {
+        let content = "const router = createRouter({ routes })\n\nexport default router;\n";
+        let symbols = TYPESCRIPT_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "default(router)" && s.kind == SymbolKind::Object),
+            "should find 'default(router)'; got: {:?}", symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_export_default_object() {
+        let content = "export default {\n  install(app) {\n    app.component('MyComponent', MyComponent)\n  }\n}\n";
+        let symbols = TYPESCRIPT_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "default" && s.kind == SymbolKind::Object),
+            "should find 'default' as object; got: {:?}", symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_parse_export_default_call() {
+        let content = "export default createRouter({\n  history: createWebHistory(),\n  routes,\n})\n";
+        let symbols = TYPESCRIPT_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "createRouter" && s.kind == SymbolKind::Function),
+            "should find 'createRouter'; got: {:?}", symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
     }
 
     #[test]

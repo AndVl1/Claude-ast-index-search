@@ -225,6 +225,10 @@ pub fn cmd_outline(root: &Path, file: &str) -> Result<()> {
     } else if ext == "ts" || ext == "tsx" || ext == "js" || ext == "jsx" {
         // TypeScript/JavaScript — delegate to tree-sitter
         found = outline_via_treesitter(&content, crate::parsers::FileType::TypeScript, &[SymbolKind::Import])?;
+    } else if ext == "vue" {
+        found = outline_via_treesitter(&content, crate::parsers::FileType::Vue, &[SymbolKind::Import])?;
+    } else if ext == "svelte" {
+        found = outline_via_treesitter(&content, crate::parsers::FileType::Svelte, &[SymbolKind::Import])?;
     } else if ext == "swift" {
         found = outline_via_treesitter(&content, crate::parsers::FileType::Swift, &[SymbolKind::Import])?;
     } else if ext == "rb" {

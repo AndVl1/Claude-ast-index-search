@@ -195,3 +195,9 @@
     (lexical_declaration
       (variable_declarator
         name: (identifier) @export_ambient_const_name))))
+
+; === Export default ===
+
+; export default expression  (identifier, call_expression, object, etc.)
+(export_statement
+  value: (_) @export_default_value)
