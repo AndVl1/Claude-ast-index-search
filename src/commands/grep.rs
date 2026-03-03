@@ -28,8 +28,19 @@ use super::{search_files_limited, relative_path};
 /// Supported file extensions for callers/call-tree commands
 const CALLER_EXTENSIONS: [&str; 9] = ["kt", "java", "swift", "m", "h", "pm", "pl", "t", "rb"];
 
+/// Trailing word boundary: `\b` for normal names, empty for Ruby bang/question methods
+fn trailing_boundary(function_name: &str) -> &str {
+    if function_name.ends_with('!') || function_name.ends_with('?') {
+        "" // ! and ? are non-word chars — natural boundary, \b would fail here
+    } else {
+        r"\b"
+    }
+}
+
 /// Build regex pattern that matches function/method calls across languages
 fn build_caller_pattern(function_name: &str) -> String {
+    let fn_escaped = regex::escape(function_name);
+    let tb = trailing_boundary(function_name);
     format!(
         concat!(
             r"[.>]{fn}\s*\(",          // obj.func( or obj->func(
@@ -39,23 +50,27 @@ fn build_caller_pattern(function_name: &str) -> String {
             r"|this\.{fn}\s*\(",       // this.func(
             r"|super\.{fn}\s*\(",      // super.func(
             r"|\.{fn}(?:\s|$)",        // Ruby: obj.method (no parens)
-            r"|:{fn}\b",              // Ruby: :method_name (symbol ref in callbacks)
+            r"|:{fn}{tb}",             // Ruby: :method_name (symbol ref in callbacks)
             r"|\b{fn}\.",             // Ruby: bare method.chain (e.g. scope.where)
         ),
-        fn = function_name
+        fn = fn_escaped,
+        tb = tb
     )
 }
 
 /// Build regex pattern that skips function/method definitions
 fn build_def_skip_pattern(function_name: &str) -> Regex {
+    let fn_escaped = regex::escape(function_name);
+    let tb = trailing_boundary(function_name);
     Regex::new(&format!(
         concat!(
             r"\b(?:fun|func|sub)\s+{fn}\s*[<({{\[]",           // Kotlin/Swift/Perl
-            r"|\bdef\s+(?:self\.)?{fn}\b",                      // Ruby: def method / def self.method
+            r"|\bdef\s+(?:self\.)?{fn}{tb}",                    // Ruby: def method / def self.method
             r"|\b(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*",
             r"(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{{;]*>)?(?:\[\])*)\s+{fn}\s*\(", // Java
         ),
-        fn = function_name
+        fn = fn_escaped,
+        tb = tb
     )).expect("Invalid def skip pattern")
 }
 
@@ -855,7 +870,32 @@ mod tests {
         assert!(!matches(&pat, "  preprocess(data)"));
     }
 
+    #[test]
+    fn test_caller_pattern_ruby_bang_method() {
+        let pat = build_caller_pattern("authenticate_user!");
+        // Ruby callbacks with bang methods
+        assert!(matches(&pat, "  before_action :authenticate_user!"));
+        assert!(matches(&pat, "  skip_before_action :authenticate_user!, only: [:index]"));
+        // Direct calls
+        assert!(matches(&pat, "  authenticate_user!(request)"));
+        assert!(matches(&pat, "  current_user.authenticate_user!"));
+    }
+
+    #[test]
+    fn test_caller_pattern_ruby_question_method() {
+        let pat = build_caller_pattern("valid?");
+        assert!(matches(&pat, "  record.valid?"));
+        assert!(matches(&pat, "  valid?(params)"));
+    }
+
     // --- build_def_skip_pattern tests ---
+
+    #[test]
+    fn test_def_skip_ruby_bang_method() {
+        let pat = build_def_skip_pattern("authenticate_user!");
+        assert!(pat.is_match("  def authenticate_user!"));
+        assert!(pat.is_match("  def self.authenticate_user!"));
+    }
 
     #[test]
     fn test_def_skip_ruby_instance_method() {
