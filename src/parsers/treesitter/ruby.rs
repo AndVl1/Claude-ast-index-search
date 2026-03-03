@@ -241,6 +241,45 @@ impl LanguageParser for RubyParser {
                         }
                     }
 
+                    // Alba serializer: attribute (singular with block), one, many
+                    // Dry::Initializer: option (keyword arg), param (positional arg)
+                    "attribute" | "one" | "many" | "option" | "param"
+                        if !has_receiver =>
+                    {
+                        if let Some(arg) = first_arg {
+                            let sym_name = normalize_symbol(arg);
+                            symbols.push(ParsedSymbol {
+                                name: format!("{} :{}", method, sym_name),
+                                kind: SymbolKind::Property,
+                                line,
+                                signature: line_text(content, line).trim().to_string(),
+                                parents: vec![],
+                            });
+                        }
+                    }
+
+                    // Alba serializer: attributes (plural, multiple args)
+                    "attributes" if !has_receiver => {
+                        let sig = line_text(content, line).trim().to_string();
+                        if let Some(call) = call_node {
+                            if let Some(args_node) = call.child_by_field_name("arguments") {
+                                for i in 0..args_node.named_child_count() {
+                                    if let Some(arg_node) = args_node.named_child(i as u32) {
+                                        let arg_text = node_text(content, &arg_node);
+                                        let sym_name = normalize_symbol(arg_text);
+                                        symbols.push(ParsedSymbol {
+                                            name: format!("attributes :{}", sym_name),
+                                            kind: SymbolKind::Property,
+                                            line,
+                                            signature: sig.clone(),
+                                            parents: vec![],
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Rails ActiveStorage / enum / delegate / encrypts / store_accessor
                     "has_one_attached" | "has_many_attached"
                     | "enum" | "delegate" | "encrypts" | "store_accessor"
@@ -900,5 +939,68 @@ end
             refs.iter().filter(|r| r.name.contains('!')).map(|r| &r.name).collect::<Vec<_>>());
         assert!(refs.iter().any(|r| r.name == "validate_contract!"),
             "should find validate_contract! as cross-file reference");
+    }
+
+    #[test]
+    fn test_parse_alba_attributes_plural() {
+        // Alba: attributes :id, :name, :icon, :color
+        let content = r#"class CategorySerializer
+  include Alba::Resource
+  attributes :id, :name, :icon, :color
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "attributes :id" && s.kind == SymbolKind::Property),
+            "should find attributes :id; got: {:?}",
+            symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        assert!(symbols.iter().any(|s| s.name == "attributes :name" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "attributes :icon" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "attributes :color" && s.kind == SymbolKind::Property));
+    }
+
+    #[test]
+    fn test_parse_alba_attribute_one_many() {
+        // Alba: attribute (singular with block), one, many
+        let content = r#"class EventRecordSerializer
+  include Alba::Resource
+  attributes :id, :name
+  one :category, serializer: CategorySerializer
+  many :records, serializer: RecordSerializer
+  attribute :last_recorded_at do |record|
+    record.last_recorded_at&.iso8601
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "one :category" && s.kind == SymbolKind::Property),
+            "should find one :category; got: {:?}",
+            symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        assert!(symbols.iter().any(|s| s.name == "many :records" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "attribute :last_recorded_at" && s.kind == SymbolKind::Property));
+    }
+
+    #[test]
+    fn test_parse_dry_initializer_option_and_param() {
+        // Dry::Initializer: option (keyword args), param (positional args)
+        let content = r#"class CreateService < ApplicationService
+  option :event_record, Types.Instance(EventRecord)
+  option :email, Types::String
+  option :category_ids, default: -> { nil }
+  param :name, Types::String
+
+  def process
+    # ...
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "option :event_record" && s.kind == SymbolKind::Property),
+            "should find option :event_record; got: {:?}",
+            symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        assert!(symbols.iter().any(|s| s.name == "option :email" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "option :category_ids" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "param :name" && s.kind == SymbolKind::Property),
+            "should find param :name; got: {:?}",
+            symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
     }
 }
