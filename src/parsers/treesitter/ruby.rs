@@ -166,17 +166,25 @@ impl LanguageParser for RubyParser {
                         }
                     }
 
-                    // attr_reader / attr_writer / attr_accessor
+                    // attr_reader / attr_writer / attr_accessor — all arguments
                     "attr_reader" | "attr_writer" | "attr_accessor" if !has_receiver => {
-                        if let Some(arg) = first_arg {
-                            let sym_name = normalize_symbol(arg);
-                            symbols.push(ParsedSymbol {
-                                name: format!(":{}", sym_name),
-                                kind: SymbolKind::Property,
-                                line,
-                                signature: line_text(content, line).trim().to_string(),
-                                parents: vec![],
-                            });
+                        let sig = line_text(content, line).trim().to_string();
+                        if let Some(call) = call_node {
+                            if let Some(args_node) = call.child_by_field_name("arguments") {
+                                for i in 0..args_node.named_child_count() {
+                                    if let Some(arg_node) = args_node.named_child(i as u32) {
+                                        let arg_text = node_text(content, &arg_node);
+                                        let sym_name = normalize_symbol(arg_text);
+                                        symbols.push(ParsedSymbol {
+                                            name: format!(":{}", sym_name),
+                                            kind: SymbolKind::Property,
+                                            line,
+                                            signature: sig.clone(),
+                                            parents: vec![],
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -524,10 +532,11 @@ mod tests {
 
     #[test]
     fn test_parse_attr_accessor() {
-        let content = "class User\n  attr_reader :name\n  attr_writer :email\n  attr_accessor :age\nend\n";
+        let content = "class User\n  attr_reader :name, :email\n  attr_writer :password\n  attr_accessor :age\nend\n";
         let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
         assert!(symbols.iter().any(|s| s.name == ":name" && s.kind == SymbolKind::Property));
         assert!(symbols.iter().any(|s| s.name == ":email" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == ":password" && s.kind == SymbolKind::Property));
         assert!(symbols.iter().any(|s| s.name == ":age" && s.kind == SymbolKind::Property));
     }
 
