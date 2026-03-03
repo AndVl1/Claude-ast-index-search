@@ -25,6 +25,55 @@ use regex::Regex;
 
 use super::{search_files_limited, relative_path};
 
+/// Supported file extensions for callers/call-tree commands
+const CALLER_EXTENSIONS: [&str; 9] = ["kt", "java", "swift", "m", "h", "pm", "pl", "t", "rb"];
+
+/// Trailing word boundary: `\b` for normal names, empty for Ruby bang/question methods
+fn trailing_boundary(function_name: &str) -> &str {
+    if function_name.ends_with('!') || function_name.ends_with('?') {
+        "" // ! and ? are non-word chars — natural boundary, \b would fail here
+    } else {
+        r"\b"
+    }
+}
+
+/// Build regex pattern that matches function/method calls across languages
+fn build_caller_pattern(function_name: &str) -> String {
+    let fn_escaped = regex::escape(function_name);
+    let tb = trailing_boundary(function_name);
+    format!(
+        concat!(
+            r"[.>]{fn}\s*\(",          // obj.func( or obj->func(
+            r"|\b{fn}\s*\(",           // bare func( anywhere in line
+            r"|->{fn}\s*\(",           // ->func(
+            r"|&{fn}\s*\(",            // &func(
+            r"|this\.{fn}\s*\(",       // this.func(
+            r"|super\.{fn}\s*\(",      // super.func(
+            r"|\.{fn}(?:\s|$)",        // Ruby: obj.method (no parens)
+            r"|:{fn}{tb}",             // Ruby: :method_name (symbol ref in callbacks)
+            r"|\b{fn}\.",             // Ruby: bare method.chain (e.g. scope.where)
+        ),
+        fn = fn_escaped,
+        tb = tb
+    )
+}
+
+/// Build regex pattern that skips function/method definitions
+fn build_def_skip_pattern(function_name: &str) -> Regex {
+    let fn_escaped = regex::escape(function_name);
+    let tb = trailing_boundary(function_name);
+    Regex::new(&format!(
+        concat!(
+            r"\b(?:fun|func|sub)\s+{fn}\s*[<({{\[]",           // Kotlin/Swift/Perl
+            r"|\bdef\s+(?:self\.)?{fn}{tb}",                    // Ruby: def method / def self.method
+            r"|\b(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*",
+            r"(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{{;]*>)?(?:\[\])*)\s+{fn}\s*\(", // Java
+        ),
+        fn = fn_escaped,
+        tb = tb
+    )).expect("Invalid def skip pattern")
+}
+
 /// Find TODO/FIXME/HACK comments
 pub fn cmd_todo(root: &Path, pattern: &str, limit: usize) -> Result<()> {
     let start = Instant::now();
@@ -81,21 +130,13 @@ pub fn cmd_todo(root: &Path, pattern: &str, limit: usize) -> Result<()> {
 /// Find function callers
 pub fn cmd_callers(root: &Path, function_name: &str, limit: usize) -> Result<()> {
     let start = Instant::now();
-    // Pattern for function calls: obj.func(), ->func(), func(), this.func(), super.func()
-    let pattern = format!(
-        r"[.>]{fn_name}\s*\(|^\s*{fn_name}\s*\(|->{fn_name}\s*\(|&{fn_name}\s*\(|this\.{fn_name}\s*\(|super\.{fn_name}\s*\(",
-        fn_name = function_name
-    );
-    // Skip definitions in Kotlin/Java/Swift/Perl
-    let def_pattern = Regex::new(&format!(
-        r"\b(?:fun|func|def|sub)\s+{fn}\s*[<({{\[]|\b(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{{;]*>)?(?:\[\])*)\s+{fn}\s*\(",
-        fn = function_name
-    ))?;
+    let pattern = build_caller_pattern(function_name);
+    let def_pattern = build_def_skip_pattern(function_name);
 
     let mut by_file: HashMap<String, Vec<(usize, String)>> = HashMap::new();
     let mut count = 0;
 
-    search_files_limited(root, &pattern, &["kt", "java", "swift", "m", "h", "pm", "pl", "t"], limit, |path, line_num, line| {
+    search_files_limited(root, &pattern, &CALLER_EXTENSIONS, limit, |path, line_num, line| {
         if def_pattern.is_match(line) { return; } // Skip definitions
 
         let rel_path = relative_path(root, path);
@@ -172,27 +213,25 @@ fn build_call_tree(
 
 /// Find functions that call the given function
 fn find_caller_functions(root: &Path, function_name: &str, limit: usize) -> Result<Vec<(String, String, usize)>> {
-    let pattern = format!(
-        r"[.>]{fn_name}\s*\(|^\s*{fn_name}\s*\(|->{fn_name}\s*\(|&{fn_name}\s*\(|this\.{fn_name}\s*\(|super\.{fn_name}\s*\(",
-        fn_name = function_name
-    );
-    let def_pattern = Regex::new(&format!(
-        r"\b(?:fun|func|def|sub)\s+{fn}\s*[<({{\[]|\b(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{{;]*>)?(?:\[\])*)\s+{fn}\s*\(",
-        fn = function_name
-    ))?;
+    let pattern = build_caller_pattern(function_name);
+    let def_pattern = build_def_skip_pattern(function_name);
 
     // Pattern to find function definitions (for locating the containing function)
-    // Group 1: fun/func/def/sub style, Group 2: Java return-type style
-    // Uses <[^{;]*> instead of <[^>]*> to handle nested generics like Map<String, List<Integer>>
+    // Group 1: fun/func/sub style, Group 2: Ruby def/def self., Group 3: Java return-type style
     let func_def_re = Regex::new(
-        r"(?:fun|func|def|sub)\s+(\w+)\s*[<(\[]|(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{;]*>)?(?:\[\])*)\s+(\w+)\s*\("
+        concat!(
+            r"(?:fun|func|sub)\s+(\w+)\s*[<(\[]",
+            r"|\bdef\s+(?:self\.)?(\w[!\w?]*)",
+            r"|(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*",
+            r"(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{;]*>)?(?:\[\])*)\s+(\w+)\s*\(",
+        )
     )?;
 
     let mut results: Vec<(String, String, usize)> = vec![];
     let mut files_with_calls: HashMap<PathBuf, Vec<usize>> = HashMap::new();
 
     // First pass: find all files and line numbers with calls
-    search_files_limited(root, &pattern, &["kt", "java", "swift", "m", "h", "pm", "pl", "t"], limit * 3, |path, line_num, line| {
+    search_files_limited(root, &pattern, &CALLER_EXTENSIONS, limit * 3, |path, line_num, line| {
         if def_pattern.is_match(line) { return; }
 
         files_with_calls.entry(path.to_path_buf()).or_default().push(line_num);
@@ -234,8 +273,8 @@ fn find_containing_function(lines: &[&str], target_line: usize, func_def_re: &Re
     for i in (0..=start_idx).rev() {
         let line = lines[i];
         if let Some(caps) = func_def_re.captures(line) {
-            // Group 1: fun/func/def/sub style, Group 2: Java return-type style
-            if let Some(name) = caps.get(1).or_else(|| caps.get(2)) {
+            // Group 1: fun/func/sub, Group 2: Ruby def, Group 3: Java return-type
+            if let Some(name) = caps.get(1).or_else(|| caps.get(2)).or_else(|| caps.get(3)) {
                 return Some((name.as_str().to_string(), i + 1));
             }
         }
@@ -775,4 +814,183 @@ fn find_ast_grep_binary() -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- build_caller_pattern tests ---
+
+    fn matches(pattern: &str, text: &str) -> bool {
+        Regex::new(pattern).unwrap().is_match(text)
+    }
+
+    #[test]
+    fn test_caller_pattern_dot_call_with_parens() {
+        let pat = build_caller_pattern("perform_async");
+        assert!(matches(&pat, "  MyWorker.perform_async(id)"));
+        assert!(matches(&pat, "  worker.perform_async(1, 2)"));
+    }
+
+    #[test]
+    fn test_caller_pattern_dot_call_without_parens() {
+        let pat = build_caller_pattern("process");
+        // Ruby: obj.method without parens
+        assert!(matches(&pat, "  new(*args).process"));
+        assert!(matches(&pat, "  service.process"));
+    }
+
+    #[test]
+    fn test_caller_pattern_bare_call_with_parens() {
+        let pat = build_caller_pattern("normalize_phone");
+        assert!(matches(&pat, "  normalized = normalize_phone(number)"));
+        assert!(matches(&pat, "    if result = normalize_phone(input)"));
+    }
+
+    #[test]
+    fn test_caller_pattern_symbol_ref() {
+        let pat = build_caller_pattern("set_timestamps");
+        // Ruby callbacks: before_action :method_name
+        assert!(matches(&pat, "  before_save :set_timestamps"));
+        assert!(matches(&pat, "  after_create :set_timestamps, if: :active?"));
+    }
+
+    #[test]
+    fn test_caller_pattern_method_chain() {
+        let pat = build_caller_pattern("recalc_counters");
+        // Ruby: bare method.chain
+        assert!(matches(&pat, "    recalc_counters.where(job_id: job.id)"));
+    }
+
+    #[test]
+    fn test_caller_pattern_no_false_positives_in_substring() {
+        let pat = build_caller_pattern("process");
+        // Should NOT match "preprocess" as a bare call with parens
+        assert!(!matches(&pat, "  preprocess(data)"));
+    }
+
+    #[test]
+    fn test_caller_pattern_ruby_bang_method() {
+        let pat = build_caller_pattern("authenticate_user!");
+        // Ruby callbacks with bang methods
+        assert!(matches(&pat, "  before_action :authenticate_user!"));
+        assert!(matches(&pat, "  skip_before_action :authenticate_user!, only: [:index]"));
+        // Direct calls
+        assert!(matches(&pat, "  authenticate_user!(request)"));
+        assert!(matches(&pat, "  current_user.authenticate_user!"));
+    }
+
+    #[test]
+    fn test_caller_pattern_ruby_question_method() {
+        let pat = build_caller_pattern("valid?");
+        assert!(matches(&pat, "  record.valid?"));
+        assert!(matches(&pat, "  valid?(params)"));
+    }
+
+    // --- build_def_skip_pattern tests ---
+
+    #[test]
+    fn test_def_skip_ruby_bang_method() {
+        let pat = build_def_skip_pattern("authenticate_user!");
+        assert!(pat.is_match("  def authenticate_user!"));
+        assert!(pat.is_match("  def self.authenticate_user!"));
+    }
+
+    #[test]
+    fn test_def_skip_ruby_instance_method() {
+        let pat = build_def_skip_pattern("process");
+        assert!(pat.is_match("  def process"));
+        assert!(pat.is_match("  def process(args)"));
+    }
+
+    #[test]
+    fn test_def_skip_ruby_self_method() {
+        let pat = build_def_skip_pattern("call");
+        assert!(pat.is_match("  def self.call(params)"));
+        assert!(pat.is_match("  def self.call"));
+    }
+
+    #[test]
+    fn test_def_skip_does_not_match_calls() {
+        let pat = build_def_skip_pattern("process");
+        assert!(!pat.is_match("  service.process"));
+        assert!(!pat.is_match("  result = process(data)"));
+    }
+
+    #[test]
+    fn test_def_skip_kotlin_fun() {
+        let pat = build_def_skip_pattern("calculate");
+        assert!(pat.is_match("  fun calculate(x: Int)"));
+    }
+
+    // --- find_containing_function tests ---
+
+    #[test]
+    fn test_find_containing_ruby_method() {
+        let code = vec![
+            "class MyService",
+            "  def process",
+            "    result = other_service.call(data)",
+            "    transform(result)",
+            "  end",
+            "end",
+        ];
+        let func_def_re = Regex::new(
+            concat!(
+                r"(?:fun|func|sub)\s+(\w+)\s*[<(\[]",
+                r"|\bdef\s+(?:self\.)?(\w[!\w?]*)",
+                r"|(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*",
+                r"(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{;]*>)?(?:\[\])*)\s+(\w+)\s*\(",
+            )
+        ).unwrap();
+
+        // Line 3 (0-indexed) = "    result = other_service.call(data)"
+        let result = find_containing_function(&code, 3, &func_def_re);
+        assert_eq!(result, Some(("process".to_string(), 2)));
+    }
+
+    #[test]
+    fn test_find_containing_ruby_self_method() {
+        let code = vec![
+            "class MyService",
+            "  def self.call(params)",
+            "    new(params).process",
+            "  end",
+            "end",
+        ];
+        let func_def_re = Regex::new(
+            concat!(
+                r"(?:fun|func|sub)\s+(\w+)\s*[<(\[]",
+                r"|\bdef\s+(?:self\.)?(\w[!\w?]*)",
+                r"|(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*",
+                r"(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{;]*>)?(?:\[\])*)\s+(\w+)\s*\(",
+            )
+        ).unwrap();
+
+        let result = find_containing_function(&code, 3, &func_def_re);
+        assert_eq!(result, Some(("call".to_string(), 2)));
+    }
+
+    #[test]
+    fn test_find_containing_ruby_bang_method() {
+        let code = vec![
+            "class Updater",
+            "  def update!",
+            "    record.save!",
+            "  end",
+            "end",
+        ];
+        let func_def_re = Regex::new(
+            concat!(
+                r"(?:fun|func|sub)\s+(\w+)\s*[<(\[]",
+                r"|\bdef\s+(?:self\.)?(\w[!\w?]*)",
+                r"|(?:(?:public|private|protected|static|final|abstract|synchronized|override)\s+)*",
+                r"(?:void|int|long|boolean|char|byte|short|float|double|[\w.]+(?:<[^{;]*>)?(?:\[\])*)\s+(\w+)\s*\(",
+            )
+        ).unwrap();
+
+        let result = find_containing_function(&code, 3, &func_def_re);
+        assert_eq!(result, Some(("update!".to_string(), 2)));
+    }
 }
