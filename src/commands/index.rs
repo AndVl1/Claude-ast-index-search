@@ -20,7 +20,7 @@ use crate::db::{self, SearchScope};
 use super::{search_files, relative_path};
 
 /// Full-text search across files, symbols, and file contents
-pub fn cmd_search(root: &Path, query: &str, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
+pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
     let total_start = Instant::now();
 
     if !db::db_exists(root) {
@@ -43,11 +43,18 @@ pub fn cmd_search(root: &Path, query: &str, limit: usize, format: &str, scope: &
 
     // 2. Search in symbols using FTS or fuzzy (index)
     let symbols_start = Instant::now();
-    let symbols = if fuzzy {
-        db::search_symbols_fuzzy(&conn, query, limit)?
-    } else {
-        let fts_query = format!("{}*", query); // Prefix search
-        db::search_symbols_scoped(&conn, &fts_query, limit, scope)?
+    let symbols = {
+        let raw = if fuzzy {
+            db::search_symbols_fuzzy(&conn, query, limit * if kind_filter.is_some() { 5 } else { 1 })?
+        } else {
+            let fts_query = format!("{}*", query); // Prefix search
+            db::search_symbols_scoped(&conn, &fts_query, limit * if kind_filter.is_some() { 5 } else { 1 }, scope)?
+        };
+        if let Some(kf) = kind_filter {
+            raw.into_iter().filter(|s| s.kind == kf).take(limit).collect()
+        } else {
+            raw
+        }
     };
     let symbols_time = symbols_start.elapsed();
 

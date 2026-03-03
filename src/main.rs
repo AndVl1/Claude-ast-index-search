@@ -262,6 +262,9 @@ enum Commands {
     Search {
         /// Search query
         query: String,
+        /// Filter symbols by type: class, interface, function, property
+        #[arg(long, short = 't')]
+        r#type: Option<String>,
         /// Max results
         #[arg(short, long, default_value = "20")]
         limit: usize,
@@ -682,9 +685,9 @@ fn main() -> Result<()> {
         Commands::Restore { path } => commands::management::cmd_restore(&root, &path),
         Commands::Stats => commands::management::cmd_stats(&root, format),
         // Index commands
-        Commands::Search { query, limit, in_file, module, fuzzy } => {
+        Commands::Search { query, r#type, limit, in_file, module, fuzzy } => {
             let scope = db::SearchScope { in_file: in_file.as_deref(), module: module.as_deref(), dir_prefix: dir_prefix_ref };
-            commands::index::cmd_search(&root, &query, limit, format, &scope, fuzzy)
+            commands::index::cmd_search(&root, &query, r#type.as_deref(), limit, format, &scope, fuzzy)
         }
         Commands::Symbol { name, pattern, r#type, limit, in_file, module, fuzzy } => {
             let scope = db::SearchScope { in_file: in_file.as_deref(), module: module.as_deref(), dir_prefix: dir_prefix_ref };
