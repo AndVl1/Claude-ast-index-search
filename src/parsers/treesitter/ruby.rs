@@ -1,6 +1,7 @@
 //! Tree-sitter based Ruby parser
 
 use anyhow::Result;
+use regex::Regex;
 use tree_sitter::{Language, Query, QueryCursor, StreamingIterator};
 use std::sync::LazyLock;
 
@@ -20,6 +21,42 @@ pub static RUBY_PARSER: RubyParser = RubyParser;
 pub struct RubyParser;
 
 impl LanguageParser for RubyParser {
+    fn extract_refs(&self, content: &str, defined: &[ParsedSymbol]) -> Result<Vec<super::super::ParsedRef>> {
+        // Start with the default generic references
+        let mut refs = super::super::extract_references(content, defined)?;
+
+        // Add Ruby-specific: bang methods (method!) and question methods (method?)
+        // The generic extractor misses these because ! and ? are outside \w
+        static RUBY_BANG_RE: LazyLock<Regex> = LazyLock::new(||
+            Regex::new(r"\b([a-z_][a-z0-9_]*[!?])").unwrap()
+        );
+
+        let defined_names: std::collections::HashSet<&str> =
+            defined.iter().map(|s| s.name.as_str()).collect();
+
+        for (line_num, line) in content.lines().enumerate() {
+            let line_num = line_num + 1;
+            let trimmed = line.trim();
+
+            // Skip comments and definitions
+            if trimmed.starts_with('#') { continue; }
+            if trimmed.starts_with("def ") || trimmed.starts_with("def self.") { continue; }
+
+            for caps in RUBY_BANG_RE.captures_iter(line) {
+                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                if !name.is_empty() && !defined_names.contains(name) && name.len() > 2 {
+                    refs.push(super::super::ParsedRef {
+                        name: name.to_string(),
+                        line: line_num,
+                        context: super::super::truncate_context(trimmed),
+                    });
+                }
+            }
+        }
+
+        Ok(refs)
+    }
+
     fn parse_symbols(&self, content: &str) -> Result<Vec<ParsedSymbol>> {
         let tree = parse_tree(content, &RUBY_LANGUAGE)?;
         let mut symbols = Vec::new();
@@ -803,5 +840,65 @@ end
         assert!(symbols.iter().any(|s| s.name == "VERSION" && s.kind == SymbolKind::Constant));
         assert!(symbols.iter().any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Constant));
         assert!(!symbols.iter().any(|s| s.kind == SymbolKind::Class && s.name == "VERSION"));
+    }
+
+    #[test]
+    fn test_extract_refs_bang_methods() {
+        let content = r#"class Controller
+  def create
+    authenticate_user!
+    validate_contract!
+    record.save!
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        let refs = RUBY_PARSER.extract_refs(content, &symbols).unwrap();
+        assert!(refs.iter().any(|r| r.name == "authenticate_user!"),
+            "should find 'authenticate_user!' reference; got: {:?}", refs.iter().map(|r| &r.name).collect::<Vec<_>>());
+        assert!(refs.iter().any(|r| r.name == "validate_contract!"),
+            "should find 'validate_contract!' reference");
+        assert!(refs.iter().any(|r| r.name == "save!"),
+            "should find 'save!' reference");
+    }
+
+    #[test]
+    fn test_extract_refs_question_methods() {
+        let content = r#"class Service
+  def process
+    return unless valid?
+    result.success?
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        let refs = RUBY_PARSER.extract_refs(content, &symbols).unwrap();
+        assert!(refs.iter().any(|r| r.name == "valid?"),
+            "should find 'valid?' reference; got: {:?}", refs.iter().map(|r| &r.name).collect::<Vec<_>>());
+        assert!(refs.iter().any(|r| r.name == "success?"),
+            "should find 'success?' reference");
+    }
+
+    #[test]
+    fn test_extract_refs_skips_definitions() {
+        // In a controller that CALLS authenticate_user! (defined elsewhere),
+        // the method should appear as a reference
+        let content = r#"class PostsController < BaseController
+  before_action :authenticate_user!
+
+  def create
+    validate_contract!
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        let refs = RUBY_PARSER.extract_refs(content, &symbols).unwrap();
+        // authenticate_user! and validate_contract! should appear as refs
+        // (they are NOT locally defined, only called)
+        assert!(refs.iter().any(|r| r.name == "authenticate_user!"),
+            "should find authenticate_user! as cross-file reference; got: {:?}",
+            refs.iter().filter(|r| r.name.contains('!')).map(|r| &r.name).collect::<Vec<_>>());
+        assert!(refs.iter().any(|r| r.name == "validate_contract!"),
+            "should find validate_contract! as cross-file reference");
     }
 }
