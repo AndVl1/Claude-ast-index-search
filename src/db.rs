@@ -1074,7 +1074,7 @@ impl<'a> SearchScope<'a> {
         }
         if let Some(file) = self.in_file {
             conditions.push("f.path LIKE ?".to_string());
-            params.push(format!("%{}", file));
+            params.push(format!("%{}%", file));
         }
         if let Some(module) = self.module {
             conditions.push("f.path LIKE ?".to_string());
