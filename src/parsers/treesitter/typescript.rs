@@ -44,6 +44,54 @@ fn is_all_caps(name: &str) -> bool {
         && name.chars().all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
+/// Vue/Pinia Composition API functions that create reactive state
+const REACTIVE_CALL_NAMES: &[&str] = &[
+    "ref", "reactive", "computed", "readonly",
+    "shallowRef", "shallowReactive", "shallowReadonly",
+    "toRef", "toRefs", "customRef",
+];
+
+/// Vue macros commonly used at module level
+const DEFINE_MACRO_NAMES: &[&str] = &[
+    "defineProps", "defineEmits", "defineModel",
+    "defineStore", "defineExpose", "withDefaults",
+];
+
+/// Check if a tree-sitter node is a call to a Vue Composition API reactive function
+/// (e.g. `ref(0)`, `computed(() => ...)`, `defineStore('id', () => ...)`)
+fn is_composition_api_call<'a>(content: &str, name_node: &tree_sitter::Node<'a>) -> Option<&'static str> {
+    // name_node is the identifier (e.g. "count")
+    // parent is variable_declarator: name = value
+    let var_decl = name_node.parent()?;
+    if var_decl.kind() != "variable_declarator" {
+        return None;
+    }
+
+    // Get the value node (right side of =)
+    let value_node = var_decl.child_by_field_name("value")?;
+
+    // The value might be a call_expression directly, or wrapped in `as` expression
+    let call_node = if value_node.kind() == "call_expression" {
+        value_node
+    } else if value_node.kind() == "as_expression" {
+        // const x = ref(0) as Ref<number>
+        let inner = value_node.named_child(0)?;
+        if inner.kind() == "call_expression" { inner } else { return None; }
+    } else {
+        return None;
+    };
+
+    // Get the function being called
+    let func_node = call_node.child_by_field_name("function")?;
+    let func_name = node_text(content, &func_node);
+
+    if REACTIVE_CALL_NAMES.contains(&func_name) || DEFINE_MACRO_NAMES.contains(&func_name) {
+        Some(if REACTIVE_CALL_NAMES.contains(&func_name) { "reactive" } else { "macro" })
+    } else {
+        None
+    }
+}
+
 /// Check if an import source is a relative/local import
 fn is_relative_import(source: &str) -> bool {
     source.starts_with('.')
@@ -496,23 +544,35 @@ impl LanguageParser for TypeScriptParser {
             if let Some(name_cap) = find_capture(m, idx_const_name) {
                 let name = node_text(content, &name_cap.node);
                 let line = node_line(&name_cap.node);
-                if is_all_caps(name) && emitted_lines.insert((name.to_string(), line)) {
-                    // Check that this is at module level (parent chain: variable_declarator -> lexical_declaration -> program)
-                    let decl_node = name_cap.node.parent(); // variable_declarator
-                    let lex_node = decl_node.and_then(|n| n.parent()); // lexical_declaration
-                    let parent_node = lex_node.and_then(|n| n.parent()); // should be program
-                    let is_module_level = parent_node
-                        .map(|n| n.kind() == "program")
-                        .unwrap_or(false);
-
-                    if is_module_level {
+                if emitted_lines.insert((name.to_string(), line)) {
+                    // Check for Vue Composition API calls: const x = ref(), computed(), etc.
+                    if let Some(api_kind) = is_composition_api_call(content, &name_cap.node) {
+                        let kind = if api_kind == "macro" { SymbolKind::Function } else { SymbolKind::Property };
                         symbols.push(ParsedSymbol {
                             name: name.to_string(),
-                            kind: SymbolKind::Constant,
+                            kind,
                             line,
                             signature: line_text(content, line).trim().to_string(),
                             parents: vec![],
                         });
+                    } else if is_all_caps(name) {
+                        // ALL_CAPS constants at module level
+                        let decl_node = name_cap.node.parent(); // variable_declarator
+                        let lex_node = decl_node.and_then(|n| n.parent()); // lexical_declaration
+                        let parent_node = lex_node.and_then(|n| n.parent()); // should be program
+                        let is_module_level = parent_node
+                            .map(|n| n.kind() == "program")
+                            .unwrap_or(false);
+
+                        if is_module_level {
+                            symbols.push(ParsedSymbol {
+                                name: name.to_string(),
+                                kind: SymbolKind::Constant,
+                                line,
+                                signature: line_text(content, line).trim().to_string(),
+                                parents: vec![],
+                            });
+                        }
                     }
                 }
                 continue;
@@ -521,15 +581,27 @@ impl LanguageParser for TypeScriptParser {
             if let Some(name_cap) = find_capture(m, idx_export_const_name) {
                 let name = node_text(content, &name_cap.node);
                 let line = node_line(&name_cap.node);
-                if is_all_caps(name) && emitted_lines.insert((name.to_string(), line)) {
-                    // Export statement is always module-level
-                    symbols.push(ParsedSymbol {
-                        name: name.to_string(),
-                        kind: SymbolKind::Constant,
-                        line,
-                        signature: line_text(content, line).trim().to_string(),
-                        parents: vec![],
-                    });
+                if emitted_lines.insert((name.to_string(), line)) {
+                    // Check for Vue Composition API calls
+                    if let Some(api_kind) = is_composition_api_call(content, &name_cap.node) {
+                        let kind = if api_kind == "macro" { SymbolKind::Function } else { SymbolKind::Property };
+                        symbols.push(ParsedSymbol {
+                            name: name.to_string(),
+                            kind,
+                            line,
+                            signature: line_text(content, line).trim().to_string(),
+                            parents: vec![],
+                        });
+                    } else if is_all_caps(name) {
+                        // Export statement is always module-level
+                        symbols.push(ParsedSymbol {
+                            name: name.to_string(),
+                            kind: SymbolKind::Constant,
+                            line,
+                            signature: line_text(content, line).trim().to_string(),
+                            parents: vec![],
+                        });
+                    }
                 }
                 continue;
             }
@@ -1022,5 +1094,79 @@ class Foo {
         let symbols = TYPESCRIPT_PARSER.parse_symbols(content).unwrap();
         assert!(symbols.iter().any(|s| s.name == "#secret" && s.kind == SymbolKind::Property));
         assert!(symbols.iter().any(|s| s.name == "#process" && s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_parse_vue_composition_api_in_ts() {
+        let content = r#"
+const count = ref(0)
+const items = reactive<Item[]>([])
+const doubled = computed(() => count.value * 2)
+const name = shallowRef('hello')
+const data = readonly(state)
+"#;
+        let symbols = TYPESCRIPT_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "count" && s.kind == SymbolKind::Property),
+            "should find 'count' as ref property; got: {:?}", symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        assert!(symbols.iter().any(|s| s.name == "items" && s.kind == SymbolKind::Property),
+            "should find 'items' as reactive property");
+        assert!(symbols.iter().any(|s| s.name == "doubled" && s.kind == SymbolKind::Property),
+            "should find 'doubled' as computed property");
+        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property),
+            "should find 'name' as shallowRef property");
+        assert!(symbols.iter().any(|s| s.name == "data" && s.kind == SymbolKind::Property),
+            "should find 'data' as readonly property");
+    }
+
+    #[test]
+    fn test_parse_pinia_store_in_ts() {
+        // Pinia store defined in a .ts file
+        let content = r#"
+export const useAuthStore = defineStore('auth', () => {
+  const user = ref(null)
+  const token = ref('')
+  const isAuthenticated = computed(() => !!user.value)
+
+  async function login(email: string, password: string) {
+    const response = await api.post('/login', { email, password })
+    user.value = response.data
+  }
+
+  return { user, token, isAuthenticated, login }
+})
+"#;
+        let symbols = TYPESCRIPT_PARSER.parse_symbols(content).unwrap();
+        // Store itself (arrow function from defineStore)
+        assert!(symbols.iter().any(|s| s.name == "useAuthStore"),
+            "should find 'useAuthStore'; got: {:?}", symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        // Reactive state inside store
+        assert!(symbols.iter().any(|s| s.name == "user" && s.kind == SymbolKind::Property),
+            "should find 'user' as ref property");
+        assert!(symbols.iter().any(|s| s.name == "token" && s.kind == SymbolKind::Property),
+            "should find 'token' as ref property");
+        assert!(symbols.iter().any(|s| s.name == "isAuthenticated" && s.kind == SymbolKind::Property),
+            "should find 'isAuthenticated' as computed property");
+        // Actions (functions inside store)
+        assert!(symbols.iter().any(|s| s.name == "login" && s.kind == SymbolKind::Function),
+            "should find 'login' function");
+    }
+
+    #[test]
+    fn test_parse_define_macros_in_ts() {
+        let content = r#"
+const props = defineProps<{ msg: string }>()
+const emit = defineEmits<{ click: [] }>()
+const model = defineModel<string>()
+export const useTaskStore = defineStore('tasks', () => { return {} })
+"#;
+        let symbols = TYPESCRIPT_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "props" && s.kind == SymbolKind::Function),
+            "should find 'props' from defineProps as function; got: {:?}", symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        assert!(symbols.iter().any(|s| s.name == "emit" && s.kind == SymbolKind::Function),
+            "should find 'emit' from defineEmits as function");
+        assert!(symbols.iter().any(|s| s.name == "model" && s.kind == SymbolKind::Function),
+            "should find 'model' from defineModel as function");
+        assert!(symbols.iter().any(|s| s.name == "useTaskStore"),
+            "should find 'useTaskStore' from defineStore");
     }
 }
