@@ -74,6 +74,10 @@ fn build_caller_pattern(function_name: &str) -> String {
             r"|\.{fn}(?:\s|$)",        // Ruby: obj.method (no parens)
             r"|:{fn}{tb}",             // Ruby: :method_name (symbol ref in callbacks)
             r"|\b{fn}\.",             // Ruby: bare method.chain (e.g. scope.where)
+            r"|\bawait\s+{fn}\s*\(",               // TS: await func(
+            r"|\bawait\s+[\w.]+\.{fn}\s*\(",       // TS: await obj.func(
+            r"|\breturn\s+{fn}\s*\(",              // TS: return func(
+            r"|\breturn\s+[\w.]+\.{fn}\s*\(",      // TS: return obj.func(
         ),
         fn = fn_escaped,
         tb = tb
@@ -910,6 +914,38 @@ mod tests {
         let pat = build_caller_pattern("valid?");
         assert!(matches(&pat, "  record.valid?"));
         assert!(matches(&pat, "  valid?(params)"));
+    }
+
+    #[test]
+    fn test_caller_pattern_await_bare_call() {
+        let pat = build_caller_pattern("fetchCategories");
+        assert!(matches(&pat, "  await fetchCategories()"));
+        assert!(matches(&pat, "  const result = await fetchCategories()"));
+    }
+
+    #[test]
+    fn test_caller_pattern_await_method_call() {
+        let pat = build_caller_pattern("loadEventRecords");
+        assert!(matches(&pat, "  await store.loadEventRecords()"));
+        assert!(matches(&pat, "  await this.loadEventRecords()"));
+    }
+
+    #[test]
+    fn test_caller_pattern_return_bare_call() {
+        let pat = build_caller_pattern("pluralize");
+        assert!(matches(&pat, "  return pluralize(count, forms)"));
+    }
+
+    #[test]
+    fn test_caller_pattern_return_method_call() {
+        let pat = build_caller_pattern("serialize");
+        assert!(matches(&pat, "  return serializer.serialize()"));
+    }
+
+    #[test]
+    fn test_caller_pattern_await_chained() {
+        let pat = build_caller_pattern("addAction");
+        assert!(matches(&pat, "  await syncQueue.addAction(action)"));
     }
 
     // --- build_def_skip_pattern tests ---
