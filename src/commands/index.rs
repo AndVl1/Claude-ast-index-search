@@ -33,40 +33,83 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
 
     let conn = db::open_db(root)?;
 
-    // 1. Search in file paths (index)
+    // Split query by comma for OR semantics: "email,mail" searches both terms
+    let terms: Vec<&str> = query.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()).collect();
+    let per_term_limit = if terms.len() > 1 { limit } else { limit };
+
+    // Collect results from all terms, deduplicating
+    let mut files: Vec<String> = vec![];
+    let mut symbols: Vec<db::SearchResult> = vec![];
+    let mut ref_matches: Vec<(String, i64)> = vec![];
+    let mut content_matches: Vec<(String, usize, String)> = vec![];
+
+    let mut seen_files = std::collections::HashSet::new();
+    let mut seen_symbols = std::collections::HashSet::new();
+    let mut seen_refs = std::collections::HashSet::new();
+    let mut seen_content = std::collections::HashSet::new();
+
     let files_start = Instant::now();
-    let mut files = db::find_files(&conn, query, limit)?;
-    if let Some(prefix) = scope.dir_prefix {
-        files.retain(|f| f.starts_with(prefix));
+    let symbols_start; // declared below
+    let refs_start;
+    let content_start;
+
+    // 1. Search in file paths (index)
+    for term in &terms {
+        let mut term_files = db::find_files(&conn, term, per_term_limit)?;
+        if let Some(prefix) = scope.dir_prefix {
+            term_files.retain(|f| f.starts_with(prefix));
+        }
+        for f in term_files {
+            if seen_files.insert(f.clone()) {
+                files.push(f);
+            }
+        }
     }
     let files_time = files_start.elapsed();
 
     // 2. Search in symbols using FTS or fuzzy (index)
-    let symbols_start = Instant::now();
-    let symbols = {
+    symbols_start = Instant::now();
+    let fetch_limit = per_term_limit * if kind_filter.is_some() { 5 } else { 1 };
+    for term in &terms {
         let raw = if fuzzy {
-            db::search_symbols_fuzzy(&conn, query, limit * if kind_filter.is_some() { 5 } else { 1 })?
+            db::search_symbols_fuzzy(&conn, term, fetch_limit)?
         } else {
-            let fts_query = format!("{}*", query); // Prefix search
-            db::search_symbols_scoped(&conn, &fts_query, limit * if kind_filter.is_some() { 5 } else { 1 }, scope)?
+            let fts_query = format!("{}*", term);
+            db::search_symbols_scoped(&conn, &fts_query, fetch_limit, scope)?
         };
-        if let Some(kf) = kind_filter {
-            raw.into_iter().filter(|s| s.kind == kf).take(limit).collect()
-        } else {
-            raw
+        for s in raw {
+            let key = format!("{}:{}:{}", s.path, s.line, s.name);
+            if seen_symbols.insert(key) {
+                if let Some(kf) = kind_filter {
+                    if s.kind == kf { symbols.push(s); }
+                } else {
+                    symbols.push(s);
+                }
+            }
         }
-    };
+    }
+    symbols.truncate(limit);
     let symbols_time = symbols_start.elapsed();
 
     // 3. Search in references (imports and usages from index)
-    let refs_start = Instant::now();
-    let ref_matches = db::search_refs(&conn, query, limit)?;
+    refs_start = Instant::now();
+    for term in &terms {
+        let term_refs = db::search_refs(&conn, term, per_term_limit)?;
+        for (name, count) in term_refs {
+            if seen_refs.insert(name.clone()) {
+                ref_matches.push((name, count));
+            }
+        }
+    }
     let refs_time = refs_start.elapsed();
 
     // 4. Search in file contents (grep)
-    let content_start = Instant::now();
-    let pattern = regex::escape(query);
-    let mut content_matches: Vec<(String, usize, String)> = vec![];
+    content_start = Instant::now();
+    let pattern = if terms.len() > 1 {
+        terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|")
+    } else {
+        regex::escape(query)
+    };
 
     super::search_files_limited(root, &pattern, &super::grep::ALL_SOURCE_EXTENSIONS, limit, |path, line_num, line| {
         let rel_path = super::relative_path(root, path);
@@ -81,7 +124,10 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
             if !rel_path.starts_with(module) { return; }
         }
         let content: String = line.trim().chars().take(100).collect();
-        content_matches.push((rel_path, line_num, content));
+        let key = format!("{}:{}", rel_path, line_num);
+        if seen_content.insert(key) {
+            content_matches.push((rel_path, line_num, content));
+        }
     })?;
     let content_time = content_start.elapsed();
 
