@@ -34,6 +34,11 @@ brew tap defendend/ast-index
 brew install ast-index
 ```
 
+### Winget (Windows)
+```shell
+winget install --id defendend.ast-index
+```
+
 ### Migration from kotlin-index
 
 If you have the old `kotlin-index` installed:
