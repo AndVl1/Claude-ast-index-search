@@ -1,4 +1,4 @@
-# ast-index v3.26.1
+# ast-index v3.26.2
 
 Fast code search CLI for 27 programming languages. Native Rust implementation.
 
@@ -84,6 +84,46 @@ ast-index class BaseFragment
 ast-index implementations Presenter
 ast-index usages Repository
 ```
+
+## AI Agent Integration
+
+### Claude Code Plugin
+
+```bash
+# Option 1: via marketplace
+claude plugin marketplace add defendend/Claude-ast-index-search
+claude plugin install ast-index
+
+# Option 2: if ast-index is already installed
+ast-index install-claude-plugin
+```
+
+Restart Claude Code to activate. Update: `brew upgrade ast-index && claude plugin update ast-index`. Uninstall: `claude plugin uninstall ast-index`.
+
+### Gemini CLI
+
+```bash
+gemini skills install https://github.com/defendend/Claude-ast-index-search.git --path plugin/skills/ast-index
+```
+
+### Cursor / Windsurf / Yandex Code Assistant
+
+Add to `.cursor/rules` or project rules:
+
+```markdown
+Use `ast-index` CLI for fast code search. Run `ast-index rebuild` before first use.
+Available commands: search, class, implementations, usages, callers, call-tree, deps, outline, deprecated.
+```
+
+### MCP
+
+ast-index can be used as an MCP server. Any AI tool supporting Model Context Protocol gets access to structural code search.
+
+### Any Bash-capable Agent
+
+If an agent can call Bash, it can use ast-index. Add instructions to the system prompt.
+
+---
 
 ## 💝 Support Development
 
@@ -389,11 +429,14 @@ exclude:
 
 ## Changelog
 
+### 3.26.2
+- **Fix project root detection** — `rebuild` now uses CWD instead of searching upward, fixing wrong root in monorepos
+
 ### 3.26.1
-- **Windows support** — `winget install defendend.ast-index` now available
+- **Windows support** — `winget install defendend.ast-index` now available (contributed by @kulemeevag)
 - **Gemini CLI support** — added skill installation instructions
 - **MIT license** — added LICENSE file
-- **Release automation** — winget auto-update in GitHub Actions release workflow
+- **Release automation** — winget auto-update in GitHub Actions release workflow (contributed by @kulemeevag)
 
 ### 3.26.0
 - **Ruby callers/call-tree support** — `rb` added to scanned extensions, Ruby-specific call patterns (`.method` without parens, `:method_name` symbol refs, `method.chain`), bang/question method handling (`authenticate_user!`, `valid?`) (contributed by @melnik0v)
@@ -762,78 +805,6 @@ exclude:
 
 #### 1.0.0
 - Initial release: File/symbol/module search, MCP server
-
-## IDE Integration
-
-### Cursor
-
-Add to `.cursor/rules` or project's `CLAUDE.md`:
-
-```markdown
-## Code Search
-
-Use `ast-index` CLI for fast code search:
-
-\`\`\`bash
-# Search class/interface/protocol
-ast-index class "ClassName"
-
-# Find implementations
-ast-index implementations "BaseClass"
-
-# Find usages
-ast-index usages "SymbolName"
-
-# Module dependencies
-ast-index deps "module.name"
-\`\`\`
-
-Run `ast-index rebuild` in project root before first use.
-```
-
-### Claude Code Plugin
-
-#### Install Plugin
-
-From terminal:
-```bash
-# Add marketplace (once)
-claude plugin marketplace add defendend/Claude-ast-index-search
-
-# Install plugin
-claude plugin install ast-index
-```
-
-Or if ast-index binary is already installed (via brew):
-```bash
-ast-index install-claude-plugin
-```
-
-Restart Claude Code to activate the plugin.
-
-#### Update Plugin
-
-```bash
-# Update CLI
-brew upgrade ast-index
-
-# Update plugin
-claude plugin update ast-index
-```
-
-#### Uninstall Plugin
-
-```bash
-claude plugin uninstall ast-index
-```
-
-### Gemini CLI
-
-The ast-index skill also works with Gemini CLI:
-
-```bash
-gemini skills install https://github.com/defendend/Claude-ast-index-search.git --path plugin/skills/ast-index
-```
 
 ## License
 

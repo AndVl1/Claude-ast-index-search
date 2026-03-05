@@ -624,7 +624,10 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let root = find_project_root()?;
+    let root = match &cli.command {
+        Commands::Rebuild { .. } | Commands::Clear => find_project_root_for_write()?,
+        _ => find_project_root_for_read()?,
+    };
     let format = cli.format.as_str();
 
     // Migrate project DB from old kotlin-index to ast-index
@@ -805,7 +808,11 @@ fn cmd_install_claude_plugin() -> Result<()> {
     Ok(())
 }
 
-fn find_project_root() -> Result<PathBuf> {
+fn find_project_root_for_write() -> Result<PathBuf> {
+    Ok(std::env::current_dir()?)
+}
+
+fn find_project_root_for_read() -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let home = dirs::home_dir();
     for ancestor in cwd.ancestors() {
