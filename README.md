@@ -1,4 +1,4 @@
-# ast-index v3.26.2
+# ast-index v3.27.0
 
 Fast code search CLI for 28 programming languages. Native Rust implementation.
 
@@ -429,6 +429,9 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.27.0
+- **Matlab support** — 28th language, classdef/function/properties/enumeration/events parsing with Matlab vs ObjC `.m` file auto-detection
 
 ### 3.26.2
 - **Fix project root detection** — `rebuild` now uses CWD instead of searching upward, fixing wrong root in monorepos
