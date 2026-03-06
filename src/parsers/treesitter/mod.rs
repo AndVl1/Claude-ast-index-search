@@ -14,6 +14,7 @@ pub mod groovy;
 pub mod java;
 pub mod kotlin;
 pub mod lua;
+pub mod matlab;
 pub mod objc;
 pub mod php;
 pub mod proto;
@@ -57,6 +58,7 @@ pub fn get_treesitter_parser(file_type: FileType) -> Option<&'static dyn Languag
         FileType::Java => Some(&java::JAVA_PARSER),
         FileType::Kotlin => Some(&kotlin::KOTLIN_PARSER),
         FileType::Lua => Some(&lua::LUA_PARSER),
+        FileType::Matlab => Some(&matlab::MATLAB_PARSER),
         FileType::ObjC => Some(&objc::OBJC_PARSER),
         FileType::Php => Some(&php::PHP_PARSER),
         FileType::Proto => Some(&proto::PROTO_PARSER),

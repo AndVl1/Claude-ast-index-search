@@ -56,6 +56,7 @@ pub enum ProjectType {
     PHP,       // PHP - composer.json
     Ruby,      // Ruby - Gemfile, *.gemspec
     Scala,     // Scala - build.sbt
+    Matlab,    // Matlab - .m files with classdef/function
     Mixed,     // Multiple platforms present
     Unknown,
 }
@@ -78,6 +79,7 @@ impl ProjectType {
             ProjectType::PHP => "PHP",
             ProjectType::Ruby => "Ruby",
             ProjectType::Scala => "Scala",
+            ProjectType::Matlab => "Matlab",
             ProjectType::Mixed => "Mixed",
             ProjectType::Unknown => "Unknown",
         }
@@ -102,6 +104,7 @@ impl ProjectType {
             "php" | "laravel" => Some(ProjectType::PHP),
             "ruby" | "rb" | "rails" => Some(ProjectType::Ruby),
             "scala" | "sbt" => Some(ProjectType::Scala),
+            "matlab" | "m" => Some(ProjectType::Matlab),
             _ => None,
         }
     }
@@ -331,11 +334,50 @@ pub fn detect_project_type(root: &Path) -> ProjectType {
     // Scala project detection
     let has_scala = root.join("build.sbt").exists();
 
+    // Matlab project detection: look for startup.m, pathdef.m, + package dirs,
+    // or .m files containing classdef/function keywords (not ObjC markers)
+    let has_matlab = root.join("startup.m").exists()
+        || root.join("pathdef.m").exists()
+        || fs::read_dir(root)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| {
+                        let name = e.file_name();
+                        let name = name.to_string_lossy();
+                        // + prefix directories are Matlab package directories
+                        name.starts_with('+')
+                            && e.path().is_dir()
+                    })
+            })
+            .unwrap_or(false)
+        || {
+            // Sample a .m file to check for Matlab keywords
+            fs::read_dir(root)
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.path().extension().map(|ext| ext == "m").unwrap_or(false))
+                        .take(3)
+                        .any(|e| {
+                            fs::read_to_string(e.path())
+                                .map(|content| {
+                                    let trimmed = content.trim_start();
+                                    trimmed.starts_with("classdef")
+                                        || trimmed.starts_with("function")
+                                        || trimmed.starts_with('%')
+                                })
+                                .unwrap_or(false)
+                        })
+                })
+                .unwrap_or(false)
+        };
+
     // Count how many platforms are detected
     let count = [
         has_gradle, has_swift, has_perl, has_frontend, has_python, has_go,
         has_rust, has_bazel, has_bsl, has_csharp, has_cpp, has_dart,
-        has_php, has_ruby, has_scala,
+        has_php, has_ruby, has_scala, has_matlab,
     ]
         .iter()
         .filter(|&&x| x)
@@ -373,6 +415,8 @@ pub fn detect_project_type(root: &Path) -> ProjectType {
         ProjectType::Ruby
     } else if has_scala {
         ProjectType::Scala
+    } else if has_matlab {
+        ProjectType::Matlab
     } else {
         ProjectType::Unknown
     }
@@ -415,9 +459,13 @@ fn parse_file(root: &Path, file_path: &Path) -> Result<ParsedFile> {
 
     let content = fs::read_to_string(file_path)?;
 
-    // Detect file type by extension
+    // Detect file type by extension, with content-based sniffing for .m files
     let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let file_type = match parsers::FileType::from_extension(ext) {
+    let file_type = match if ext == "m" {
+        Some(parsers::FileType::detect_m_file_type(&content))
+    } else {
+        parsers::FileType::from_extension(ext)
+    } {
         Some(ft) => ft,
         None => {
             return Ok(ParsedFile {
