@@ -314,6 +314,53 @@ pub fn strip_perl_pod(content: &str) -> String {
     result
 }
 
+/// Strip Matlab comments (% line and %{ ... %} block) while preserving line numbers.
+pub fn strip_matlab_comments(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+    let mut in_block = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !in_block && trimmed == "%{" {
+            in_block = true;
+            result.push_str(&" ".repeat(line.len()));
+            result.push('\n');
+        } else if in_block && trimmed == "%}" {
+            in_block = false;
+            result.push_str(&" ".repeat(line.len()));
+            result.push('\n');
+        } else if in_block {
+            result.push_str(&" ".repeat(line.len()));
+            result.push('\n');
+        } else {
+            // Find % not inside a string
+            let mut in_single = false;
+            let bytes = line.as_bytes();
+            let mut found = None;
+            for (idx, &b) in bytes.iter().enumerate() {
+                if b == b'\'' {
+                    in_single = !in_single;
+                } else if b == b'%' && !in_single {
+                    found = Some(idx);
+                    break;
+                }
+            }
+            if let Some(idx) = found {
+                result.push_str(&line[..idx]);
+                for _ in idx..line.len() {
+                    result.push(' ');
+                }
+            } else {
+                result.push_str(line);
+            }
+            result.push('\n');
+        }
+    }
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
 /// Strip XML comments (<!-- ... -->) while preserving line numbers.
 pub fn strip_xml_comments(content: &str) -> String {
     let bytes = content.as_bytes();
@@ -382,6 +429,7 @@ pub enum FileType {
     Scala,
     Php,
     Lua,
+    Matlab,
     Elixir,
     Bash,
     Groovy,
@@ -423,6 +471,65 @@ impl FileType {
             _ => None,
         }
     }
+
+    /// Detect whether a `.m` file is Matlab or Objective-C by inspecting content.
+    /// Scans up to 50 lines accumulating evidence before deciding.
+    pub fn detect_m_file_type(content: &str) -> FileType {
+        let mut saw_percent_comment = false;
+
+        for line in content.lines().take(50) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // % comments are Matlab-only (never valid ObjC at line start)
+            if trimmed.starts_with('%') {
+                saw_percent_comment = true;
+                continue;
+            }
+
+            // Strong ObjC markers — immediate return
+            if trimmed.starts_with("#import")
+                || trimmed.starts_with("#include")
+                || trimmed.starts_with("#pragma")
+                || trimmed.starts_with("@interface")
+                || trimmed.starts_with("@implementation")
+                || trimmed.starts_with("@protocol")
+                || trimmed.starts_with("@property")
+                || trimmed.starts_with("@synthesize")
+                || trimmed.starts_with("@dynamic")
+                || trimmed.starts_with("@end")
+            {
+                return FileType::ObjC;
+            }
+
+            // Strong Matlab markers — immediate return
+            // Use word boundaries: "function " not "functionality"
+            if trimmed.starts_with("classdef ")
+                || trimmed.starts_with("classdef(")
+                || trimmed == "classdef"
+                || trimmed.starts_with("function ")
+                || trimmed.starts_with("function[")
+                || trimmed == "function"
+            {
+                return FileType::Matlab;
+            }
+
+            // C-style comments → ObjC
+            if trimmed.starts_with("//") || trimmed.starts_with("/*") {
+                return FileType::ObjC;
+            }
+        }
+
+        // If % comments found but no strong markers → Matlab
+        if saw_percent_comment {
+            return FileType::Matlab;
+        }
+
+        // Default to ObjC (backward compatible)
+        FileType::ObjC
+    }
 }
 
 /// Check if file extension is supported for indexing
@@ -463,6 +570,8 @@ fn strip_comments(content: &str, file_type: FileType) -> String {
         // Hash comments
         FileType::Bash | FileType::R | FileType::Elixir => strip_hash_comments(content),
 
+        // Matlab: % line comments and %{ %} block comments
+        FileType::Matlab => strip_matlab_comments(content),
         // SQL: -- line comments and /* */ block comments (C-style)
         FileType::Sql => strip_c_comments(content, false),
 
@@ -842,5 +951,60 @@ mod tests {
         assert_eq!(FileType::from_extension("pm"), Some(FileType::Perl));
         assert_eq!(FileType::from_extension("txt"), None);
         assert_eq!(FileType::from_extension(""), None);
+    }
+
+    #[test]
+    fn test_detect_m_file_objc_import() {
+        let content = "#import <Foundation/Foundation.h>\n@interface Foo : NSObject\n@end\n";
+        assert_eq!(FileType::detect_m_file_type(content), FileType::ObjC);
+    }
+
+    #[test]
+    fn test_detect_m_file_objc_interface() {
+        let content = "@interface MyClass : NSObject\n@end\n";
+        assert_eq!(FileType::detect_m_file_type(content), FileType::ObjC);
+    }
+
+    #[test]
+    fn test_detect_m_file_objc_c_comment() {
+        let content = "// This is ObjC\n@implementation Foo\n@end\n";
+        assert_eq!(FileType::detect_m_file_type(content), FileType::ObjC);
+    }
+
+    #[test]
+    fn test_detect_m_file_matlab_function() {
+        let content = "function result = myFunc(x)\n    result = x + 1;\nend\n";
+        assert_eq!(FileType::detect_m_file_type(content), FileType::Matlab);
+    }
+
+    #[test]
+    fn test_detect_m_file_matlab_classdef() {
+        let content = "classdef MyClass < handle\n    properties\n        Value\n    end\nend\n";
+        assert_eq!(FileType::detect_m_file_type(content), FileType::Matlab);
+    }
+
+    #[test]
+    fn test_detect_m_file_matlab_percent_comment() {
+        // Matlab script with % comment followed by plain statement
+        let content = "% This is a Matlab script\nx = 5;\ny = x + 1;\n";
+        assert_eq!(FileType::detect_m_file_type(content), FileType::Matlab);
+    }
+
+    #[test]
+    fn test_detect_m_file_matlab_function_with_comments() {
+        let content = "% My function\n% Does stuff\nfunction y = helper(x)\n    y = x * 2;\nend\n";
+        assert_eq!(FileType::detect_m_file_type(content), FileType::Matlab);
+    }
+
+    #[test]
+    fn test_detect_m_file_empty() {
+        assert_eq!(FileType::detect_m_file_type(""), FileType::ObjC);
+    }
+
+    #[test]
+    fn test_detect_m_file_word_boundary() {
+        // "functionality" should NOT match "function"
+        let content = "% comment\nfunctionality = 5;\n";
+        assert_eq!(FileType::detect_m_file_type(content), FileType::Matlab);
     }
 }

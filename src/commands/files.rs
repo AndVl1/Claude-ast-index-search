@@ -241,7 +241,10 @@ pub fn cmd_outline(root: &Path, file: &str) -> Result<()> {
         found = outline_via_treesitter(&content, crate::parsers::FileType::CSharp, &[SymbolKind::Import])?;
     } else if ext == "proto" {
         found = outline_via_treesitter(&content, crate::parsers::FileType::Proto, &[])?;
-    } else if ext == "m" || ext == "mm" {
+    } else if ext == "m" {
+        let ft = crate::parsers::FileType::detect_m_file_type(&content);
+        found = outline_via_treesitter(&content, ft, &[SymbolKind::Import])?;
+    } else if ext == "mm" {
         found = outline_via_treesitter(&content, crate::parsers::FileType::ObjC, &[SymbolKind::Import])?;
     } else {
         // Kotlin (default fallback — existing regex logic)
