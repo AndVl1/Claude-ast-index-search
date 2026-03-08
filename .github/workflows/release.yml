@@ -32,6 +32,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             name: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            name: linux-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
@@ -106,7 +109,7 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ env.RELEASE_TAG }}
         run: |
-          for platform in darwin-arm64 darwin-x86_64 linux-x86_64; do
+          for platform in darwin-arm64 darwin-x86_64 linux-x86_64 linux-arm64; do
             curl -L -o "ast-index-${platform}.tar.gz" \
               "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-${platform}.tar.gz"
             hash=$(sha256sum "ast-index-${platform}.tar.gz" | cut -d ' ' -f1)
@@ -126,6 +129,7 @@ jobs:
           SHA_DARWIN_ARM64: ${{ steps.sha.outputs.darwin-arm64 }}
           SHA_DARWIN_X86_64: ${{ steps.sha.outputs.darwin-x86_64 }}
           SHA_LINUX_X86_64: ${{ steps.sha.outputs.linux-x86_64 }}
+          SHA_LINUX_ARM64: ${{ steps.sha.outputs.linux-arm64 }}
         run: |
           cat > Formula/ast-index.rb << FORMULA
           class AstIndex < Formula
@@ -145,8 +149,13 @@ jobs:
             end
 
             on_linux do
-              url "https://github.com/defendend/Claude-ast-index-search/releases/download/${TAG}/ast-index-${TAG}-linux-x86_64.tar.gz"
-              sha256 "${SHA_LINUX_X86_64}"
+              if Hardware::CPU.arm?
+                url "https://github.com/defendend/Claude-ast-index-search/releases/download/${TAG}/ast-index-${TAG}-linux-arm64.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              else
+                url "https://github.com/defendend/Claude-ast-index-search/releases/download/${TAG}/ast-index-${TAG}-linux-x86_64.tar.gz"
+                sha256 "${SHA_LINUX_X86_64}"
+              end
             end
 
             def install
