@@ -116,14 +116,6 @@ Use `ast-index` CLI for fast code search. Run `ast-index rebuild` before first u
 Available commands: search, class, implementations, usages, callers, call-tree, deps, outline, deprecated.
 ```
 
-### MCP
-
-ast-index can be used as an MCP server. Any AI tool supporting Model Context Protocol gets access to structural code search.
-
-### Any Bash-capable Agent
-
-If an agent can call Bash, it can use ast-index. Add instructions to the system prompt.
-
 ---
 
 ## 💝 Support Development
