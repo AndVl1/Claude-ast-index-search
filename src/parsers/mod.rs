@@ -409,6 +409,7 @@ pub use wsdl::parse_wsdl_symbols;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     Bsl,
+    CommonLisp,
     Kotlin,
     Java,
     Swift,
@@ -442,6 +443,7 @@ impl FileType {
     pub fn from_extension(ext: &str) -> Option<FileType> {
         match ext {
             "bsl" | "os" => Some(FileType::Bsl),
+            "lisp" | "lsp" | "cl" | "asd" => Some(FileType::CommonLisp),
             "kt" => Some(FileType::Kotlin),
             "java" => Some(FileType::Java),
             "swift" => Some(FileType::Swift),
@@ -576,7 +578,8 @@ fn strip_comments(content: &str, file_type: FileType) -> String {
         FileType::Sql => strip_c_comments(content, false),
 
         // Vue/Svelte: comments stripped after script extraction
-        FileType::Vue | FileType::Svelte => content.to_string(),
+        // Common Lisp: tree-sitter handles comments natively (unreachable)
+        FileType::Vue | FileType::Svelte | FileType::CommonLisp => content.to_string(),
     }
 }
 

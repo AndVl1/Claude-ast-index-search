@@ -5,6 +5,7 @@
 
 pub mod bash;
 pub mod bsl;
+pub mod common_lisp;
 pub mod cpp;
 pub mod csharp;
 pub mod dart;
@@ -49,6 +50,7 @@ pub fn get_treesitter_parser(file_type: FileType) -> Option<&'static dyn Languag
     match file_type {
         FileType::Bash => Some(&bash::BASH_PARSER),
         FileType::Bsl => Some(&bsl::BSL_PARSER),
+        FileType::CommonLisp => Some(&common_lisp::COMMON_LISP_PARSER),
         FileType::Cpp => Some(&cpp::CPP_PARSER),
         FileType::CSharp => Some(&csharp::CSHARP_PARSER),
         FileType::Dart => Some(&dart::DART_PARSER),
