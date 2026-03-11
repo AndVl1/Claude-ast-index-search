@@ -1,6 +1,6 @@
-# ast-index v3.27.0
+# ast-index v3.28.0
 
-Fast code search CLI for 28 programming languages. Native Rust implementation.
+Fast code search CLI for 29 programming languages. Native Rust implementation.
 
 ## Supported Projects
 
@@ -21,6 +21,7 @@ Fast code search CLI for 28 programming languages. Native Rust implementation.
 | Data | SQL, R | `.sql`, `.r`, `.R` |
 | Scientific | Matlab | `.m` |
 | JVM | Groovy | `.groovy`, `.gradle` |
+| Functional | Common Lisp | `.lisp`, `.lsp`, `.cl`, `.asd` |
 
 Project type is auto-detected.
 
@@ -421,6 +422,9 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.28.0
+- **Common Lisp support** — 29th language, defun/defmacro/defgeneric/defmethod/defclass/defstruct/defvar/defparameter/defconstant/defpackage parsing (contributed by @svetlyak40wt)
 
 ### 3.27.0
 - **Matlab support** — 28th language, classdef/function/properties/enumeration/events parsing with Matlab vs ObjC `.m` file auto-detection
