@@ -61,7 +61,7 @@ pub fn cmd_search(root: &Path, query: &str, limit: usize, format: &str, scope: &
     let pattern = regex::escape(query);
     let mut content_matches: Vec<(String, usize, String)> = vec![];
 
-    super::search_files_limited(root, &pattern, &["kt", "java", "swift", "m", "h", "py", "go", "rs", "cpp", "c", "proto", "ts", "tsx", "js", "jsx"], limit, |path, line_num, line| {
+    super::search_files_limited(root, &pattern, &super::grep::ALL_SOURCE_EXTENSIONS, limit, |path, line_num, line| {
         let rel_path = super::relative_path(root, path);
         // Apply scope filter for grep results
         if let Some(prefix) = scope.dir_prefix {

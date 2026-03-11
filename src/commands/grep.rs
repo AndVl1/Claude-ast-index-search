@@ -25,8 +25,30 @@ use regex::Regex;
 
 use super::{search_files_limited, relative_path};
 
-/// Supported file extensions for callers/call-tree commands
-const CALLER_EXTENSIONS: [&str; 15] = ["kt", "java", "swift", "m", "h", "pm", "pl", "t", "rb", "ts", "tsx", "js", "jsx", "vue", "svelte"];
+/// All source code extensions (for grep-based commands: todo, search, callers, etc.)
+pub const ALL_SOURCE_EXTENSIONS: [&str; 50] = [
+    "kt", "java", "swift", "m", "h",           // Mobile
+    "dart",                                      // Flutter
+    "pm", "pl", "t", "rb",                      // Scripting
+    "ts", "tsx", "js", "jsx", "mjs", "cjs",    // JavaScript/TypeScript
+    "vue", "svelte",                             // Web frameworks
+    "py",                                        // Python
+    "go",                                        // Go
+    "rs",                                        // Rust
+    "cs",                                        // C#
+    "cpp", "cc", "c", "hpp",                    // C++
+    "scala", "sc",                               // Scala
+    "php", "phtml",                              // PHP
+    "groovy", "gradle",                          // Groovy
+    "lua",                                       // Lua
+    "ex", "exs",                                 // Elixir
+    "sh", "bash", "zsh",                         // Shell
+    "sql",                                       // SQL
+    "r", "R",                                    // R
+    "bsl", "os",                                 // BSL
+    "lisp", "lsp", "cl", "asd",                 // Common Lisp
+    "proto", "wsdl", "xsd",                      // Schema
+];
 
 /// Trailing word boundary: `\b` for normal names, empty for Ruby bang/question methods
 fn trailing_boundary(function_name: &str) -> &str {
@@ -87,7 +109,7 @@ pub fn cmd_todo(root: &Path, pattern: &str, limit: usize) -> Result<()> {
 
     let mut count = 0;
 
-    search_files_limited(root, &search_pattern, &["kt", "java", "swift", "m", "h", "pm", "pl", "t", "rb", "ts", "tsx", "js", "jsx", "vue", "svelte"], limit, |path, line_num, line| {
+    search_files_limited(root, &search_pattern, &ALL_SOURCE_EXTENSIONS, limit, |path, line_num, line| {
 
         let rel_path = relative_path(root, path);
         let content: String = line.chars().take(80).collect();
@@ -136,7 +158,7 @@ pub fn cmd_callers(root: &Path, function_name: &str, limit: usize) -> Result<()>
     let mut by_file: HashMap<String, Vec<(usize, String)>> = HashMap::new();
     let mut count = 0;
 
-    search_files_limited(root, &pattern, &CALLER_EXTENSIONS, limit, |path, line_num, line| {
+    search_files_limited(root, &pattern, &ALL_SOURCE_EXTENSIONS, limit, |path, line_num, line| {
         if def_pattern.is_match(line) { return; } // Skip definitions
 
         let rel_path = relative_path(root, path);
@@ -232,7 +254,7 @@ fn find_caller_functions(root: &Path, function_name: &str, limit: usize) -> Resu
     let mut files_with_calls: HashMap<PathBuf, Vec<usize>> = HashMap::new();
 
     // First pass: find all files and line numbers with calls
-    search_files_limited(root, &pattern, &CALLER_EXTENSIONS, limit * 3, |path, line_num, line| {
+    search_files_limited(root, &pattern, &ALL_SOURCE_EXTENSIONS, limit * 3, |path, line_num, line| {
         if def_pattern.is_match(line) { return; }
 
         files_with_calls.entry(path.to_path_buf()).or_default().push(line_num);
@@ -472,13 +494,14 @@ pub fn cmd_composables(root: &Path, query: Option<&str>, limit: usize) -> Result
 /// Find @Deprecated annotations
 pub fn cmd_deprecated(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
     let start = Instant::now();
-    // Kotlin/Java: @Deprecated, Swift: @available(*, deprecated)
-    // Perl: DEPRECATED in comments or POD =head DEPRECATED
-    let pattern = r"@Deprecated|@available\s*\([^)]*deprecated|#.*DEPRECATED|=head.*DEPRECATED";
+    // Kotlin/Java/C#: @Deprecated/@Obsolete, Swift: @available(*, deprecated)
+    // Python: @deprecated, Perl: DEPRECATED, Rust: #[deprecated], Go: // Deprecated:
+    // JS/TS: @deprecated (JSDoc), PHP: @deprecated (PHPDoc), C++: [[deprecated]]
+    let pattern = r"@Deprecated|@Obsolete|@available\s*\([^)]*deprecated|#\[deprecated|#.*DEPRECATED|=head.*DEPRECATED|@deprecated|\[\[deprecated";
 
     let mut items: Vec<(String, usize, String)> = vec![];
 
-    search_files_limited(root, pattern, &["kt", "java", "swift", "m", "h", "pm", "pl", "t"], limit, |path, line_num, line| {
+    search_files_limited(root, pattern, &ALL_SOURCE_EXTENSIONS, limit, |path, line_num, line| {
         if let Some(q) = query {
             if !line.to_lowercase().contains(&q.to_lowercase()) {
                 return;
@@ -580,7 +603,7 @@ pub fn cmd_annotations(root: &Path, annotation: &str, limit: usize) -> Result<()
 
     let mut items: Vec<(String, usize, String)> = vec![];
 
-    search_files_limited(root, &pattern, &["kt", "java", "swift", "m", "h", "pm", "pl", "t"], limit, |path, line_num, line| {
+    search_files_limited(root, &pattern, &ALL_SOURCE_EXTENSIONS, limit, |path, line_num, line| {
         let rel_path = relative_path(root, path);
         let content: String = line.trim().chars().take(80).collect();
         items.push((rel_path, line_num, content));

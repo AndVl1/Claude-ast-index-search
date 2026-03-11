@@ -1,4 +1,4 @@
-# ast-index v3.28.0
+# ast-index v3.29.0
 
 Fast code search CLI for 29 programming languages. Native Rust implementation.
 
@@ -422,6 +422,11 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.29.0
+- **Upgraded Dart grammar** — switched to tree-sitter-dart-orchard 0.3.2, native Dart 3 support (sealed/base/final/interface classes, extension types, records, patterns)
+- **Fix implementations false positives** — removed `LIKE '%name%'` pattern that returned 6000+ false matches instead of ~180 real ones
+- **Expanded grep commands coverage** — added 50 file extensions to `ALL_SOURCE_EXTENSIONS` for todo/deprecated/annotations/callers/search commands (Dart, Lua, Elixir, Shell, SQL, R, BSL, Common Lisp, and more)
 
 ### 3.28.0
 - **Common Lisp support** — 29th language, defun/defmacro/defgeneric/defmethod/defclass/defstruct/defvar/defparameter/defconstant/defpackage parsing (contributed by @svetlyak40wt)

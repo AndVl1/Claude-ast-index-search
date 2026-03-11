@@ -8,7 +8,7 @@ use crate::db::SymbolKind;
 use crate::parsers::ParsedSymbol;
 use super::{LanguageParser, parse_tree, node_text, node_line, line_text};
 
-static DART_LANGUAGE: LazyLock<Language> = LazyLock::new(|| tree_sitter_dart::language());
+static DART_LANGUAGE: LazyLock<Language> = LazyLock::new(|| tree_sitter_dart_orchard::LANGUAGE.into());
 
 pub static DART_PARSER: DartParser = DartParser;
 
@@ -19,7 +19,7 @@ impl LanguageParser for DartParser {
         let tree = parse_tree(content, &DART_LANGUAGE)?;
         let mut symbols = Vec::new();
 
-        // Walk the tree manually since tree-sitter-dart 0.0.4 has limited query support
+        // Walk the tree manually to extract symbols
         walk_node(&tree.root_node(), content, &mut symbols);
 
         Ok(symbols)
