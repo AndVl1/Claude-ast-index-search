@@ -1,4 +1,4 @@
-# ast-index v3.29.0
+# ast-index v3.29.1
 
 Fast code search CLI for 29 programming languages. Native Rust implementation.
 
@@ -422,6 +422,9 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.29.1
+- **Fix IX build** — replaced rusqlite `bundled-full` with `bundled` to remove `time` crate dependency that failed in IX sandbox
 
 ### 3.29.0
 - **Upgraded Dart grammar** — switched to tree-sitter-dart-orchard 0.3.2, native Dart 3 support (sealed/base/final/interface classes, extension types, records, patterns)
