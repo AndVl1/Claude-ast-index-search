@@ -1,4 +1,4 @@
-# ast-index v3.29.1
+# ast-index v3.30.0
 
 Fast code search CLI for 29 programming languages. Native Rust implementation.
 
@@ -422,6 +422,17 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.30.0
+- **TS/Vue: callers for await/return** — `await func()`, `return obj.func()` patterns now detected by callers command
+- **TS: Vue Composition API outline** — `ref()`, `computed()`, `reactive()`, `defineProps()`, `defineStore()` variables appear in outline
+- **Ruby: bang/question methods in usages** — `save!`, `valid?` methods now tracked in references
+- **Ruby: Alba serializer & Dry::Initializer DSL** — `attribute`, `attributes`, `one`, `many`, `option`, `param` parsed as properties
+- **Glob patterns for class/symbol** — `--pattern "*Mailer"` for class and symbol commands
+- **Comma-separated OR queries** — `search "email,mail"` searches both terms with deduplication
+- **--type filter for search** — `search query --type class`
+- **--in-file/--module filters for hierarchy** — filter children by file or module path
+- **Fix --in-file matching** — uses contains match instead of suffix match
 
 ### 3.29.1
 - **Fix IX build** — replaced rusqlite `bundled-full` with `bundled` to remove `time` crate dependency that failed in IX sandbox
