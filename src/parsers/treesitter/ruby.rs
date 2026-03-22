@@ -1,6 +1,7 @@
 //! Tree-sitter based Ruby parser
 
 use anyhow::Result;
+use regex::Regex;
 use tree_sitter::{Language, Query, QueryCursor, StreamingIterator};
 use std::sync::LazyLock;
 
@@ -20,6 +21,42 @@ pub static RUBY_PARSER: RubyParser = RubyParser;
 pub struct RubyParser;
 
 impl LanguageParser for RubyParser {
+    fn extract_refs(&self, content: &str, defined: &[ParsedSymbol]) -> Result<Vec<super::super::ParsedRef>> {
+        // Start with the default generic references
+        let mut refs = super::super::extract_references(content, defined)?;
+
+        // Add Ruby-specific: bang methods (method!) and question methods (method?)
+        // The generic extractor misses these because ! and ? are outside \w
+        static RUBY_BANG_RE: LazyLock<Regex> = LazyLock::new(||
+            Regex::new(r"\b([a-z_][a-z0-9_]*[!?])").unwrap()
+        );
+
+        let defined_names: std::collections::HashSet<&str> =
+            defined.iter().map(|s| s.name.as_str()).collect();
+
+        for (line_num, line) in content.lines().enumerate() {
+            let line_num = line_num + 1;
+            let trimmed = line.trim();
+
+            // Skip comments and definitions
+            if trimmed.starts_with('#') { continue; }
+            if trimmed.starts_with("def ") || trimmed.starts_with("def self.") { continue; }
+
+            for caps in RUBY_BANG_RE.captures_iter(line) {
+                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                if !name.is_empty() && !defined_names.contains(name) && name.len() > 2 {
+                    refs.push(super::super::ParsedRef {
+                        name: name.to_string(),
+                        line: line_num,
+                        context: super::super::truncate_context(trimmed),
+                    });
+                }
+            }
+        }
+
+        Ok(refs)
+    }
+
     fn parse_symbols(&self, content: &str) -> Result<Vec<ParsedSymbol>> {
         let tree = parse_tree(content, &RUBY_LANGUAGE)?;
         let mut symbols = Vec::new();
@@ -201,6 +238,45 @@ impl LanguageParser for RubyParser {
                                 signature: line_text(content, line).trim().to_string(),
                                 parents: vec![],
                             });
+                        }
+                    }
+
+                    // Alba serializer: attribute (singular with block), one, many
+                    // Dry::Initializer: option (keyword arg), param (positional arg)
+                    "attribute" | "one" | "many" | "option" | "param"
+                        if !has_receiver =>
+                    {
+                        if let Some(arg) = first_arg {
+                            let sym_name = normalize_symbol(arg);
+                            symbols.push(ParsedSymbol {
+                                name: format!("{} :{}", method, sym_name),
+                                kind: SymbolKind::Property,
+                                line,
+                                signature: line_text(content, line).trim().to_string(),
+                                parents: vec![],
+                            });
+                        }
+                    }
+
+                    // Alba serializer: attributes (plural, multiple args)
+                    "attributes" if !has_receiver => {
+                        let sig = line_text(content, line).trim().to_string();
+                        if let Some(call) = call_node {
+                            if let Some(args_node) = call.child_by_field_name("arguments") {
+                                for i in 0..args_node.named_child_count() {
+                                    if let Some(arg_node) = args_node.named_child(i as u32) {
+                                        let arg_text = node_text(content, &arg_node);
+                                        let sym_name = normalize_symbol(arg_text);
+                                        symbols.push(ParsedSymbol {
+                                            name: format!("attributes :{}", sym_name),
+                                            kind: SymbolKind::Property,
+                                            line,
+                                            signature: sig.clone(),
+                                            parents: vec![],
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -803,5 +879,128 @@ end
         assert!(symbols.iter().any(|s| s.name == "VERSION" && s.kind == SymbolKind::Constant));
         assert!(symbols.iter().any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Constant));
         assert!(!symbols.iter().any(|s| s.kind == SymbolKind::Class && s.name == "VERSION"));
+    }
+
+    #[test]
+    fn test_extract_refs_bang_methods() {
+        let content = r#"class Controller
+  def create
+    authenticate_user!
+    validate_contract!
+    record.save!
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        let refs = RUBY_PARSER.extract_refs(content, &symbols).unwrap();
+        assert!(refs.iter().any(|r| r.name == "authenticate_user!"),
+            "should find 'authenticate_user!' reference; got: {:?}", refs.iter().map(|r| &r.name).collect::<Vec<_>>());
+        assert!(refs.iter().any(|r| r.name == "validate_contract!"),
+            "should find 'validate_contract!' reference");
+        assert!(refs.iter().any(|r| r.name == "save!"),
+            "should find 'save!' reference");
+    }
+
+    #[test]
+    fn test_extract_refs_question_methods() {
+        let content = r#"class Service
+  def process
+    return unless valid?
+    result.success?
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        let refs = RUBY_PARSER.extract_refs(content, &symbols).unwrap();
+        assert!(refs.iter().any(|r| r.name == "valid?"),
+            "should find 'valid?' reference; got: {:?}", refs.iter().map(|r| &r.name).collect::<Vec<_>>());
+        assert!(refs.iter().any(|r| r.name == "success?"),
+            "should find 'success?' reference");
+    }
+
+    #[test]
+    fn test_extract_refs_skips_definitions() {
+        // In a controller that CALLS authenticate_user! (defined elsewhere),
+        // the method should appear as a reference
+        let content = r#"class PostsController < BaseController
+  before_action :authenticate_user!
+
+  def create
+    validate_contract!
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        let refs = RUBY_PARSER.extract_refs(content, &symbols).unwrap();
+        // authenticate_user! and validate_contract! should appear as refs
+        // (they are NOT locally defined, only called)
+        assert!(refs.iter().any(|r| r.name == "authenticate_user!"),
+            "should find authenticate_user! as cross-file reference; got: {:?}",
+            refs.iter().filter(|r| r.name.contains('!')).map(|r| &r.name).collect::<Vec<_>>());
+        assert!(refs.iter().any(|r| r.name == "validate_contract!"),
+            "should find validate_contract! as cross-file reference");
+    }
+
+    #[test]
+    fn test_parse_alba_attributes_plural() {
+        // Alba: attributes :id, :name, :icon, :color
+        let content = r#"class CategorySerializer
+  include Alba::Resource
+  attributes :id, :name, :icon, :color
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "attributes :id" && s.kind == SymbolKind::Property),
+            "should find attributes :id; got: {:?}",
+            symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        assert!(symbols.iter().any(|s| s.name == "attributes :name" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "attributes :icon" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "attributes :color" && s.kind == SymbolKind::Property));
+    }
+
+    #[test]
+    fn test_parse_alba_attribute_one_many() {
+        // Alba: attribute (singular with block), one, many
+        let content = r#"class EventRecordSerializer
+  include Alba::Resource
+  attributes :id, :name
+  one :category, serializer: CategorySerializer
+  many :records, serializer: RecordSerializer
+  attribute :last_recorded_at do |record|
+    record.last_recorded_at&.iso8601
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "one :category" && s.kind == SymbolKind::Property),
+            "should find one :category; got: {:?}",
+            symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        assert!(symbols.iter().any(|s| s.name == "many :records" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "attribute :last_recorded_at" && s.kind == SymbolKind::Property));
+    }
+
+    #[test]
+    fn test_parse_dry_initializer_option_and_param() {
+        // Dry::Initializer: option (keyword args), param (positional args)
+        let content = r#"class CreateService < ApplicationService
+  option :event_record, Types.Instance(EventRecord)
+  option :email, Types::String
+  option :category_ids, default: -> { nil }
+  param :name, Types::String
+
+  def process
+    # ...
+  end
+end
+"#;
+        let symbols = RUBY_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "option :event_record" && s.kind == SymbolKind::Property),
+            "should find option :event_record; got: {:?}",
+            symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
+        assert!(symbols.iter().any(|s| s.name == "option :email" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "option :category_ids" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "param :name" && s.kind == SymbolKind::Property),
+            "should find param :name; got: {:?}",
+            symbols.iter().map(|s| (&s.name, &s.kind)).collect::<Vec<_>>());
     }
 }

@@ -20,7 +20,7 @@ use crate::db::{self, SearchScope};
 use super::{search_files, relative_path};
 
 /// Full-text search across files, symbols, and file contents
-pub fn cmd_search(root: &Path, query: &str, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
+pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
     let total_start = Instant::now();
 
     if !db::db_exists(root) {
@@ -33,33 +33,83 @@ pub fn cmd_search(root: &Path, query: &str, limit: usize, format: &str, scope: &
 
     let conn = db::open_db(root)?;
 
-    // 1. Search in file paths (index)
+    // Split query by comma for OR semantics: "email,mail" searches both terms
+    let terms: Vec<&str> = query.split(',').map(|t| t.trim()).filter(|t| !t.is_empty()).collect();
+    let per_term_limit = if terms.len() > 1 { limit } else { limit };
+
+    // Collect results from all terms, deduplicating
+    let mut files: Vec<String> = vec![];
+    let mut symbols: Vec<db::SearchResult> = vec![];
+    let mut ref_matches: Vec<(String, i64)> = vec![];
+    let mut content_matches: Vec<(String, usize, String)> = vec![];
+
+    let mut seen_files = std::collections::HashSet::new();
+    let mut seen_symbols = std::collections::HashSet::new();
+    let mut seen_refs = std::collections::HashSet::new();
+    let mut seen_content = std::collections::HashSet::new();
+
     let files_start = Instant::now();
-    let mut files = db::find_files(&conn, query, limit)?;
-    if let Some(prefix) = scope.dir_prefix {
-        files.retain(|f| f.starts_with(prefix));
+    let symbols_start; // declared below
+    let refs_start;
+    let content_start;
+
+    // 1. Search in file paths (index)
+    for term in &terms {
+        let mut term_files = db::find_files(&conn, term, per_term_limit)?;
+        if let Some(prefix) = scope.dir_prefix {
+            term_files.retain(|f| f.starts_with(prefix));
+        }
+        for f in term_files {
+            if seen_files.insert(f.clone()) {
+                files.push(f);
+            }
+        }
     }
     let files_time = files_start.elapsed();
 
     // 2. Search in symbols using FTS or fuzzy (index)
-    let symbols_start = Instant::now();
-    let symbols = if fuzzy {
-        db::search_symbols_fuzzy(&conn, query, limit)?
-    } else {
-        let fts_query = format!("{}*", query); // Prefix search
-        db::search_symbols_scoped(&conn, &fts_query, limit, scope)?
-    };
+    symbols_start = Instant::now();
+    let fetch_limit = per_term_limit * if kind_filter.is_some() { 5 } else { 1 };
+    for term in &terms {
+        let raw = if fuzzy {
+            db::search_symbols_fuzzy(&conn, term, fetch_limit)?
+        } else {
+            let fts_query = format!("{}*", term);
+            db::search_symbols_scoped(&conn, &fts_query, fetch_limit, scope)?
+        };
+        for s in raw {
+            let key = format!("{}:{}:{}", s.path, s.line, s.name);
+            if seen_symbols.insert(key) {
+                if let Some(kf) = kind_filter {
+                    if s.kind == kf { symbols.push(s); }
+                } else {
+                    symbols.push(s);
+                }
+            }
+        }
+    }
+    symbols.truncate(limit);
     let symbols_time = symbols_start.elapsed();
 
     // 3. Search in references (imports and usages from index)
-    let refs_start = Instant::now();
-    let ref_matches = db::search_refs(&conn, query, limit)?;
+    refs_start = Instant::now();
+    for term in &terms {
+        let term_refs = db::search_refs(&conn, term, per_term_limit)?;
+        for (name, count) in term_refs {
+            if seen_refs.insert(name.clone()) {
+                ref_matches.push((name, count));
+            }
+        }
+    }
     let refs_time = refs_start.elapsed();
 
     // 4. Search in file contents (grep)
-    let content_start = Instant::now();
-    let pattern = regex::escape(query);
-    let mut content_matches: Vec<(String, usize, String)> = vec![];
+    content_start = Instant::now();
+    let pattern = if terms.len() > 1 {
+        terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|")
+    } else {
+        regex::escape(query)
+    };
 
     super::search_files_limited(root, &pattern, &super::grep::ALL_SOURCE_EXTENSIONS, limit, |path, line_num, line| {
         let rel_path = super::relative_path(root, path);
@@ -74,7 +124,10 @@ pub fn cmd_search(root: &Path, query: &str, limit: usize, format: &str, scope: &
             if !rel_path.starts_with(module) { return; }
         }
         let content: String = line.trim().chars().take(100).collect();
-        content_matches.push((rel_path, line_num, content));
+        let key = format!("{}:{}", rel_path, line_num);
+        if seen_content.insert(key) {
+            content_matches.push((rel_path, line_num, content));
+        }
     })?;
     let content_time = content_start.elapsed();
 
@@ -143,8 +196,8 @@ pub fn cmd_search(root: &Path, query: &str, limit: usize, format: &str, scope: &
     Ok(())
 }
 
-/// Find symbol by name
-pub fn cmd_symbol(root: &Path, name: &str, kind: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
+/// Find symbol by name or glob pattern
+pub fn cmd_symbol(root: &Path, name: Option<&str>, pattern: Option<&str>, kind: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
     let start = Instant::now();
 
     if !db::db_exists(root) {
@@ -155,11 +208,22 @@ pub fn cmd_symbol(root: &Path, name: &str, kind: Option<&str>, limit: usize, for
         return Ok(());
     }
 
+    if name.is_none() && pattern.is_none() {
+        println!("{}", "Either a symbol name or --pattern is required.".red());
+        return Ok(());
+    }
+
     let conn = db::open_db(root)?;
-    let symbols = if fuzzy && kind.is_none() {
-        db::search_symbols_fuzzy(&conn, name, limit)?
+    let symbols = if let Some(pat) = pattern {
+        let like_pattern = db::glob_to_like(pat);
+        db::find_symbols_by_pattern(&conn, &like_pattern, kind, limit, scope)?
     } else {
-        db::find_symbols_by_name_scoped(&conn, name, kind, limit, scope)?
+        let name = name.unwrap();
+        if fuzzy && kind.is_none() {
+            db::search_symbols_fuzzy(&conn, name, limit)?
+        } else {
+            db::find_symbols_by_name_scoped(&conn, name, kind, limit, scope)?
+        }
     };
 
     if format == "json" {
@@ -167,10 +231,11 @@ pub fn cmd_symbol(root: &Path, name: &str, kind: Option<&str>, limit: usize, for
         return Ok(());
     }
 
+    let query_str = pattern.unwrap_or(name.unwrap_or(""));
     let kind_str = kind.map(|k| format!(" ({})", k)).unwrap_or_default();
     println!(
         "{}",
-        format!("Symbols matching '{}'{}:", name, kind_str).bold()
+        format!("Symbols matching '{}'{}:", query_str, kind_str).bold()
     );
 
     for s in &symbols {
@@ -189,8 +254,8 @@ pub fn cmd_symbol(root: &Path, name: &str, kind: Option<&str>, limit: usize, for
     Ok(())
 }
 
-/// Find class by name (classes, interfaces, objects, enums)
-pub fn cmd_class(root: &Path, name: &str, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
+/// Find class by name or glob pattern (classes, interfaces, objects, enums)
+pub fn cmd_class(root: &Path, name: Option<&str>, pattern: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
     let start = Instant::now();
 
     if !db::db_exists(root) {
@@ -201,18 +266,27 @@ pub fn cmd_class(root: &Path, name: &str, limit: usize, format: &str, scope: &Se
         return Ok(());
     }
 
+    if name.is_none() && pattern.is_none() {
+        println!("{}", "Either a class name or --pattern is required.".red());
+        return Ok(());
+    }
+
     let conn = db::open_db(root)?;
 
-    // Single query for all class-like symbols
-    let results = if fuzzy {
-        // Fuzzy: search all symbols then filter to class-like kinds
-        let all = db::search_symbols_fuzzy(&conn, name, limit * 5)?;
-        all.into_iter()
-            .filter(|s| matches!(s.kind.as_str(), "class" | "interface" | "object" | "enum" | "protocol" | "struct" | "actor" | "package"))
-            .take(limit)
-            .collect()
+    let results = if let Some(pat) = pattern {
+        let like_pattern = db::glob_to_like(pat);
+        db::find_class_like_pattern(&conn, &like_pattern, limit, scope)?
     } else {
-        db::find_class_like_scoped(&conn, name, limit, scope)?
+        let name = name.unwrap();
+        if fuzzy {
+            let all = db::search_symbols_fuzzy(&conn, name, limit * 5)?;
+            all.into_iter()
+                .filter(|s| matches!(s.kind.as_str(), "class" | "interface" | "object" | "enum" | "protocol" | "struct" | "actor" | "package"))
+                .take(limit)
+                .collect()
+        } else {
+            db::find_class_like_scoped(&conn, name, limit, scope)?
+        }
     };
 
     if format == "json" {
@@ -220,7 +294,8 @@ pub fn cmd_class(root: &Path, name: &str, limit: usize, format: &str, scope: &Se
         return Ok(());
     }
 
-    println!("{}", format!("Classes matching '{}':", name).bold());
+    let query_str = pattern.unwrap_or(name.unwrap_or(""));
+    println!("{}", format!("Classes matching '{}':", query_str).bold());
 
     for s in &results {
         println!("  {} [{}]: {}:{}", s.name.cyan(), s.kind, s.path, s.line);
@@ -349,7 +424,7 @@ pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str) -> Result
 }
 
 /// Show class hierarchy (parents and children)
-pub fn cmd_hierarchy(root: &Path, name: &str) -> Result<()> {
+pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()> {
     let start = Instant::now();
 
     if !db::db_exists(root) {
@@ -392,12 +467,28 @@ pub fn cmd_hierarchy(root: &Path, name: &str) -> Result<()> {
         }
     }
 
-    // Find children
-    let children = db::find_implementations(&conn, name, 20)?;
+    // Find children (with optional scope filtering)
+    let children = if scope.is_empty() {
+        db::find_implementations(&conn, name, 50)?
+    } else {
+        let all = db::find_implementations(&conn, name, 200)?;
+        all.into_iter().filter(|s| {
+            if let Some(in_file) = scope.in_file {
+                if !s.path.contains(in_file) { return false; }
+            }
+            if let Some(module) = scope.module {
+                if !s.path.starts_with(module) { return false; }
+            }
+            if let Some(prefix) = scope.dir_prefix {
+                if !s.path.starts_with(prefix) { return false; }
+            }
+            true
+        }).collect()
+    };
     if !children.is_empty() {
         println!("\n  {}", "Children:".cyan());
         for c in &children {
-            println!("    {} [{}]", c.name, c.kind);
+            println!("    {} [{}]: {}", c.name, c.kind, c.path);
         }
     }
 
