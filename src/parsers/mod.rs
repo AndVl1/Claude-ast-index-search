@@ -432,6 +432,7 @@ pub enum FileType {
     Lua,
     Matlab,
     Elixir,
+    Gdscript,
     Bash,
     Groovy,
     R,
@@ -466,6 +467,7 @@ impl FileType {
             "php" | "phtml" => Some(FileType::Php),
             "lua" => Some(FileType::Lua),
             "ex" | "exs" => Some(FileType::Elixir),
+            "gd" => Some(FileType::Gdscript),
             "sh" | "bash" | "zsh" => Some(FileType::Bash),
             "sql" => Some(FileType::Sql),
             "groovy" | "gradle" => Some(FileType::Groovy),
@@ -570,7 +572,7 @@ fn strip_comments(content: &str, file_type: FileType) -> String {
         // XML comments
         FileType::Wsdl => strip_xml_comments(content),
         // Hash comments
-        FileType::Bash | FileType::R | FileType::Elixir => strip_hash_comments(content),
+        FileType::Bash | FileType::R | FileType::Elixir | FileType::Gdscript => strip_hash_comments(content),
 
         // Matlab: % line comments and %{ %} block comments
         FileType::Matlab => strip_matlab_comments(content),
@@ -731,6 +733,7 @@ mod tests {
         assert!(is_supported_extension("phtml"));
         assert!(is_supported_extension("vue"));
         assert!(is_supported_extension("svelte"));
+        assert!(is_supported_extension("gd"));
     }
 
     #[test]
@@ -952,6 +955,7 @@ mod tests {
         assert_eq!(FileType::from_extension("wsdl"), Some(FileType::Wsdl));
         assert_eq!(FileType::from_extension("cpp"), Some(FileType::Cpp));
         assert_eq!(FileType::from_extension("pm"), Some(FileType::Perl));
+        assert_eq!(FileType::from_extension("gd"), Some(FileType::Gdscript));
         assert_eq!(FileType::from_extension("txt"), None);
         assert_eq!(FileType::from_extension(""), None);
     }

@@ -59,6 +59,7 @@ tree-sitter-r = "1.2"
 tree-sitter-matlab = "1.3"
 fs2 = "0.4.3"
 tree-sitter-commonlisp = "0.4.1"
+tree-sitter-gdscript = "6.1"
 
 [build-dependencies]
 cc = "1"

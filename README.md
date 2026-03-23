@@ -1,6 +1,6 @@
 # ast-index v3.30.0
 
-Fast code search CLI for 29 programming languages. Native Rust implementation.
+Fast code search CLI for 30 programming languages. Native Rust implementation.
 
 ## Supported Projects
 
@@ -22,6 +22,7 @@ Fast code search CLI for 29 programming languages. Native Rust implementation.
 | Scientific | Matlab | `.m` |
 | JVM | Groovy | `.groovy`, `.gradle` |
 | Functional | Common Lisp | `.lisp`, `.lsp`, `.cl`, `.asd` |
+| Game | GDScript (Godot) | `.gd` |
 
 Project type is auto-detected.
 

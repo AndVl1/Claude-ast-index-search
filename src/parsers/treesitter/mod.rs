@@ -10,6 +10,7 @@ pub mod cpp;
 pub mod csharp;
 pub mod dart;
 pub mod elixir;
+pub mod gdscript;
 pub mod go;
 pub mod groovy;
 pub mod java;
@@ -55,6 +56,7 @@ pub fn get_treesitter_parser(file_type: FileType) -> Option<&'static dyn Languag
         FileType::CSharp => Some(&csharp::CSHARP_PARSER),
         FileType::Dart => Some(&dart::DART_PARSER),
         FileType::Elixir => Some(&elixir::ELIXIR_PARSER),
+        FileType::Gdscript => Some(&gdscript::GDSCRIPT_PARSER),
         FileType::Go => Some(&go::GO_PARSER),
         FileType::Groovy => Some(&groovy::GROOVY_PARSER),
         FileType::Java => Some(&java::JAVA_PARSER),

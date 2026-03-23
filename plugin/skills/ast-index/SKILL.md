@@ -59,6 +59,7 @@ The index is stored at `~/Library/Caches/ast-index/<project-hash>/index.db` (mac
 | Proto | Protocol Buffers (proto2/proto3) | None (*.proto files) |
 | WSDL | WSDL, XSD | None (*.wsdl, *.xsd files) |
 | C/C++ | C, C++ (JNI, uservices) | None (*.cpp, *.h, *.hpp files) |
+| Godot | GDScript | project.godot |
 | Mixed | All above | All |
 
 Project type is auto-detected by marker files (build.gradle.kts, Package.swift, Makefile.PL, etc.). Python, Go, Proto, WSDL, and C++ files are indexed alongside main project type.
