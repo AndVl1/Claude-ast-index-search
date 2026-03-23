@@ -1,4 +1,4 @@
-# ast-index v3.30.0
+# ast-index v3.31.0
 
 Fast code search CLI for 30 programming languages. Native Rust implementation.
 
@@ -423,6 +423,10 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.31.0
+- **GDScript (Godot) support** — 30th language: class_name, class, func, signal, enum, const, var, @export var, @onready var, extends hierarchy
+- **Fix BSL cross-compilation** — added `.std("c11")` to build.rs for tree-sitter-bsl C code compilation
 
 ### 3.30.0
 - **TS/Vue: callers for await/return** — `await func()`, `return obj.func()` patterns now detected by callers command
