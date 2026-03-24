@@ -1,16 +1,16 @@
 {
   "name": "@ast-index/cli",
-  "version": "3.31.0",
+  "version": "3.32.0",
   "description": "Fast AST-based symbol indexer for AI coding agents",
   "bin": {
     "ast-index": "./bin/ast-index"
   },
   "optionalDependencies": {
-    "@ast-index/cli-darwin-arm64": "3.31.0",
-    "@ast-index/cli-darwin-x64": "3.31.0",
-    "@ast-index/cli-linux-x64": "3.31.0",
-    "@ast-index/cli-linux-arm64": "3.31.0",
-    "@ast-index/cli-win32-x64": "3.31.0"
+    "@ast-index/cli-darwin-arm64": "3.32.0",
+    "@ast-index/cli-darwin-x64": "3.32.0",
+    "@ast-index/cli-linux-x64": "3.32.0",
+    "@ast-index/cli-linux-arm64": "3.32.0",
+    "@ast-index/cli-win32-x64": "3.32.0"
   },
   "repository": {
     "type": "git",
