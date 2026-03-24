@@ -5,3 +5,5 @@ mobile-tools/
 .mcp.json
 .catalyst/
 .glm-cli/
+npm/platforms/*/bin/ast-index
+npm/platforms/*/bin/ast-index.exe

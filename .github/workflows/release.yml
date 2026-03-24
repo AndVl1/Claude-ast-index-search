@@ -26,18 +26,23 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             name: darwin-arm64
+            npm_suffix: darwin-arm64
           - os: macos-15-intel
             target: x86_64-apple-darwin
             name: darwin-x86_64
+            npm_suffix: darwin-x64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             name: linux-x86_64
+            npm_suffix: linux-x64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             name: linux-arm64
+            npm_suffix: linux-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: windows-x86_64
+            npm_suffix: win32-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +79,26 @@ jobs:
           name: ast-index-${{ matrix.name }}
           path: ast-index-${{ env.RELEASE_TAG }}-${{ matrix.name }}.*
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Copy binary to npm platform package (unix)
+        if: matrix.name != 'windows-x86_64'
+        run: cp target/${{ matrix.target }}/release/ast-index npm/platforms/${{ matrix.npm_suffix }}/bin/ast-index
+
+      - name: Copy binary to npm platform package (windows)
+        if: matrix.name == 'windows-x86_64'
+        shell: pwsh
+        run: Copy-Item "target/${{ matrix.target }}/release/ast-index.exe" "npm/platforms/${{ matrix.npm_suffix }}/bin/ast-index.exe"
+
+      - name: Publish npm platform package
+        run: cd npm/platforms/${{ matrix.npm_suffix }} && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   release:
     name: Create Release
     needs: build
@@ -93,6 +118,26 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
           files: artifacts/*
+
+  publish-npm:
+    name: Publish npm base package
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish base package
+        run: cd npm && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   update-homebrew:
     name: Update Homebrew Formula
