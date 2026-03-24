@@ -1,7 +1,23 @@
 {
   "name": "@ast-index/cli",
   "version": "3.32.2",
-  "description": "Fast AST-based symbol indexer for AI coding agents",
+  "description": "Fast AST-based code search CLI for 30 programming languages. Native Rust binary distributed via npm.",
+  "keywords": [
+    "ast",
+    "code-search",
+    "symbol-search",
+    "indexer",
+    "claude-code",
+    "ai-coding",
+    "typescript",
+    "kotlin",
+    "swift",
+    "rust",
+    "python",
+    "ruby",
+    "go",
+    "tree-sitter"
+  ],
   "bin": {
     "ast-index": "./bin/ast-index"
   },
@@ -16,6 +32,7 @@
     "type": "git",
     "url": "https://github.com/defendend/Claude-ast-index-search"
   },
+  "homepage": "https://github.com/defendend/Claude-ast-index-search#readme",
   "license": "MIT",
   "engines": {
     "node": ">=14"
