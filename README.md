@@ -1,4 +1,4 @@
-# ast-index v3.32.1
+# ast-index v3.32.2
 
 Fast code search CLI for 30 programming languages. Native Rust implementation.
 
@@ -423,9 +423,6 @@ exclude:
 ```
 
 ## Changelog
-
-### 3.32.1
-- **npm publishing fix** — configured NPM_TOKEN for automated npm publishing on release
 
 ### 3.32.0
 - **npm distribution** — `npx @ast-index/cli` now works on all platforms (darwin arm64/x64, linux x64/arm64, win32 x64) via scoped optional dependencies (contributed by @SiereSoft)
