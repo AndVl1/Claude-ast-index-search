@@ -1,4 +1,4 @@
-# ast-index v3.32.3
+# ast-index v3.33.0
 
 Fast code search CLI for 30 programming languages. Native Rust implementation.
 
@@ -423,6 +423,10 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.33.0
+- **Fix DB lookup after VFS remount** — canonicalize project path before hashing, so index survives arc remount
+- **Auto-migrate** old DBs created with raw paths to normalized paths
 
 ### 3.32.0
 - **npm distribution** — `npx @ast-index/cli` now works on all platforms (darwin arm64/x64, linux x64/arm64, win32 x64) via scoped optional dependencies (contributed by @SiereSoft)
