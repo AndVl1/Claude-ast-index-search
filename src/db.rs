@@ -6,6 +6,15 @@ use serde::Serialize;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+/// Normalize project root path: canonicalize if possible, fallback to original.
+/// This ensures the same DB is found after VFS remount (e.g. arc mount in Arcadia).
+fn normalize_root(project_root: &Path) -> String {
+    project_root.canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// Get the database path for the current project
 pub fn get_db_path(project_root: &Path) -> Result<PathBuf> {
     // Check env: new name first, fallback to old
@@ -19,11 +28,29 @@ pub fn get_db_path(project_root: &Path) -> Result<PathBuf> {
         .context("Could not find cache directory")?
         .join("ast-index");
 
-    // Create hash from project root for unique DB per project
-    let project_hash = simple_hash(project_root.to_string_lossy().as_ref());
+    let normalized = normalize_root(project_root);
+
+    // Create hash from normalized project root for unique DB per project
+    let project_hash = simple_hash(&normalized);
     let db_dir = cache_dir.join(&project_hash);
 
-    // Auto-migrate: if new hash dir doesn't have a DB, look for old one
+    // Also compute hash from raw path (for migration from pre-normalize DBs)
+    let raw_hash = simple_hash(project_root.to_string_lossy().as_ref());
+    let raw_dir = cache_dir.join(&raw_hash);
+
+    // Migrate from raw-path hash to normalized hash if needed
+    if !db_dir.join("index.db").exists() && raw_hash != project_hash && raw_dir.join("index.db").exists() {
+        let _ = std::fs::create_dir_all(&db_dir);
+        for suffix in ["index.db", "index.db-wal", "index.db-shm"] {
+            let src = raw_dir.join(suffix);
+            if src.exists() {
+                let _ = std::fs::rename(&src, db_dir.join(suffix));
+            }
+        }
+        let _ = std::fs::remove_dir(&raw_dir);
+    }
+
+    // Auto-migrate: if new hash dir doesn't have a DB, look for old one by metadata
     if !db_dir.join("index.db").exists() {
         if let Ok(entries) = std::fs::read_dir(&cache_dir) {
             for entry in entries.flatten() {
@@ -39,7 +66,11 @@ pub fn get_db_path(project_root: &Path) -> Result<PathBuf> {
                                 |row| row.get(0),
                             );
                             if let Ok(root_val) = root_str {
-                                if root_val == project_root.to_string_lossy().as_ref() {
+                                // Match against both raw and normalized paths
+                                let stored_normalized = normalize_root(Path::new(&root_val));
+                                if stored_normalized == normalized
+                                    || root_val == project_root.to_string_lossy().as_ref()
+                                {
                                     // Found old DB for this project — migrate
                                     let _ = std::fs::create_dir_all(&db_dir);
                                     for suffix in ["index.db", "index.db-wal", "index.db-shm"] {
@@ -343,14 +374,15 @@ pub fn open_db(project_root: &Path) -> Result<Connection> {
     conn.pragma_update(None, "cache_size", "-8000")?; // 8 MB cache to limit memory
     let _: i64 = conn.query_row("PRAGMA busy_timeout = 5000", [], |row| row.get(0))?; // Wait up to 5s if DB is locked
 
-    // Store project root for hash migration
+    // Store normalized project root for hash migration
+    let normalized = normalize_root(project_root);
     conn.execute(
         "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
         [],
     ).ok();
     conn.execute(
         "INSERT OR REPLACE INTO metadata (key, value) VALUES ('project_root', ?1)",
-        params![project_root.to_string_lossy().as_ref()],
+        params![&normalized],
     ).ok();
 
     Ok(conn)
