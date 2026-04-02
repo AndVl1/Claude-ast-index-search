@@ -2,6 +2,16 @@
 (class_declaration
   name: (identifier) @class_name) @class_node
 
+; Records (index as class-like types)
+(record_declaration
+  name: (identifier) @class_name) @class_node
+
+; Record components (header parameters in `record Foo(Type x, Type y)`)
+(record_declaration
+  parameters: (formal_parameters
+    (formal_parameter
+      name: (identifier) @record_component_name) @record_component_node))
+
 ; Interfaces
 (interface_declaration
   name: (identifier) @interface_name) @interface_node

@@ -56,10 +56,14 @@ impl LanguageParser for JavaParser {
         let idx_constructor_node = idx("constructor_node");
         let idx_field_name = idx("field_name");
         let idx_field_node = idx("field_node");
+        let idx_record_component_name = idx("record_component_name");
+        let idx_record_component_node = idx("record_component_node");
         let idx_annotation_name = idx("annotation_name");
         let idx_annotation_call_name = idx("annotation_call_name");
 
         let mut emitted: std::collections::HashSet<(String, usize)> = std::collections::HashSet::new();
+        let mut explicit_methods: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+        let mut pending_record_accessors: Vec<(String, String, usize, String)> = Vec::new();
 
         let mut matches = cursor.matches(query, tree.root_node(), content.as_bytes());
 
@@ -126,6 +130,9 @@ impl LanguageParser for JavaParser {
                 if let Some(node_cap) = find_capture(m, idx_method_node) {
                     if is_inside_type_body(&node_cap.node) {
                         let name = node_text(content, &name_cap.node);
+                        if let Some(owner) = enclosing_type_name(content, &node_cap.node) {
+                            explicit_methods.insert((owner, name.to_string()));
+                        }
                         let line = node_line(&name_cap.node);
                         if emitted.insert((name.to_string(), line)) {
                             symbols.push(ParsedSymbol {
@@ -181,6 +188,33 @@ impl LanguageParser for JavaParser {
                 continue;
             }
 
+            // === Record components (header parameters in record declarations) ===
+            if let Some(name_cap) = find_capture(m, idx_record_component_name) {
+                if let Some(node_cap) = find_capture(m, idx_record_component_node) {
+                    let name = node_text(content, &name_cap.node);
+                    let line = node_line(&name_cap.node);
+                    let component_signature = node_text(content, &node_cap.node).trim().to_string();
+                    let owner = enclosing_type_name(content, &node_cap.node).unwrap_or_default();
+
+                    // Record components are class-like fields
+                    if emitted.insert((name.to_string(), line)) {
+                        symbols.push(ParsedSymbol {
+                            name: name.to_string(),
+                            kind: SymbolKind::Property,
+                            line,
+                            signature: component_signature,
+                            parents: vec![],
+                        });
+                    }
+
+                    let accessor_signature = record_component_accessor_signature(content, &node_cap.node, name);
+
+                    // Emit synthetic accessors after we know explicit methods in the same type.
+                    pending_record_accessors.push((owner, name.to_string(), line, accessor_signature));
+                }
+                continue;
+            }
+
             // === Marker annotations (no arguments) ===
             if let Some(name_cap) = find_capture(m, idx_annotation_name) {
                 let name = node_text(content, &name_cap.node);
@@ -218,15 +252,60 @@ impl LanguageParser for JavaParser {
             }
         }
 
+        // Java records synthesize public accessor methods for components unless explicitly overridden.
+        for (owner, name, line, signature) in pending_record_accessors {
+            if explicit_methods.contains(&(owner, name.clone())) {
+                continue;
+            }
+            if emitted.insert((format!("{}#record_accessor", name), line)) {
+                symbols.push(ParsedSymbol {
+                    name: name.to_string(),
+                    kind: SymbolKind::Function,
+                    line,
+                    signature,
+                    parents: vec![],
+                });
+            }
+        }
+
         Ok(symbols)
     }
 }
 
-/// Check if a node is inside a class_body, interface_body, or enum_body
+/// Check if a node is inside a class/interface/enum/record body
 fn is_inside_type_body(node: &tree_sitter::Node) -> bool {
     node.parent()
-        .map(|p| matches!(p.kind(), "class_body" | "interface_body" | "enum_body" | "enum_body_declarations"))
+        .map(|p| matches!(
+            p.kind(),
+            "class_body" | "interface_body" | "enum_body" | "enum_body_declarations" | "record_body"
+        ))
         .unwrap_or(false)
+}
+
+/// Build synthetic accessor signature for a record component (e.g. `String id()`).
+fn record_component_accessor_signature(content: &str, component_node: &tree_sitter::Node, name: &str) -> String {
+    if let Some(type_node) = component_node.child_by_field_name("type") {
+        let mut type_text = node_text(content, &type_node).trim().to_string();
+        if let Some(dim_node) = component_node.child_by_field_name("dimensions") {
+            type_text.push_str(node_text(content, &dim_node).trim());
+        }
+        return format!("{} {}()", type_text, name);
+    }
+    format!("{}()", name)
+}
+
+/// Return the nearest enclosing type declaration name (class/interface/enum/record).
+fn enclosing_type_name(content: &str, node: &tree_sitter::Node) -> Option<String> {
+    let mut cur = Some(*node);
+    while let Some(n) = cur {
+        if matches!(n.kind(), "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration") {
+            if let Some(name_node) = n.child_by_field_name("name") {
+                return Some(node_text(content, &name_node).to_string());
+            }
+        }
+        cur = n.parent();
+    }
+    None
 }
 
 /// Extract parent types from a class_declaration (extends + implements)
@@ -509,5 +588,45 @@ public class Foo {
         let cls = symbols.iter().find(|s| s.name == "UserRepo").unwrap();
         assert!(cls.parents.iter().any(|(p, k)| p == "CrudRepository" && k == "extends"));
         assert!(cls.parents.iter().any(|(p, k)| p == "UserRepository" && k == "implements"));
+    }
+
+    #[test]
+    fn test_parse_record() {
+        let content = r#"public record UserDto(String id, String name) implements Serializable {
+    public String displayName() { return name; }
+}
+"#;
+        let symbols = JAVA_PARSER.parse_symbols(content).unwrap();
+        let rec = symbols.iter().find(|s| s.name == "UserDto").unwrap();
+        assert_eq!(rec.kind, SymbolKind::Class);
+        assert!(rec.parents.iter().any(|(p, k)| p == "Serializable" && k == "implements"));
+        assert!(symbols.iter().any(|s| s.name == "displayName" && s.kind == SymbolKind::Function));
+        assert!(symbols.iter().any(|s| s.name == "id" && s.kind == SymbolKind::Property && s.signature == "String id"));
+        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property && s.signature == "String name"));
+        assert!(symbols.iter().any(|s| s.name == "id" && s.kind == SymbolKind::Function && s.signature == "String id()"));
+        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Function && s.signature == "String name()"));
+    }
+
+    #[test]
+    fn test_parse_empty_record() {
+        let content = "public record Empty() {}\n";
+        let symbols = JAVA_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "Empty" && s.kind == SymbolKind::Class));
+        assert_eq!(symbols.iter().filter(|s| s.kind == SymbolKind::Property).count(), 0);
+        assert_eq!(symbols.iter().filter(|s| s.kind == SymbolKind::Function).count(), 0);
+    }
+
+    #[test]
+    fn test_record_accessor_override_does_not_duplicate_synthetic() {
+        let content = r#"public record Foo(String name) {
+    public String name() { return name.toUpperCase(); }
+}
+"#;
+        let symbols = JAVA_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property && s.signature == "String name"));
+        assert_eq!(symbols.iter().filter(|s| s.name == "name" && s.kind == SymbolKind::Function).count(), 1);
+        assert!(symbols.iter().any(|s| s.name == "name"
+            && s.kind == SymbolKind::Function
+            && s.signature == "public String name() { return name.toUpperCase(); }"));
     }
 }
