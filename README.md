@@ -1,4 +1,4 @@
-# ast-index v3.33.1
+# ast-index v3.33.2
 
 Fast code search CLI for 30 programming languages. Native Rust implementation.
 
@@ -424,8 +424,11 @@ exclude:
 
 ## Changelog
 
+### 3.33.2
+- **Java record support** — `record` declarations indexed as classes with inheritance, record components as properties + synthetic accessor methods, dedup when accessor is explicitly overridden (contributed by @viktoraseev)
+
 ### 3.33.1
-- **parent_id for class members (Java)** — methods, constructors, fields and properties now have `parent_id` pointing to their enclosing class/interface/enum. Works with annotated classes. Other languages will follow.
+- Internal release (no user-facing changes)
 
 ### 3.33.0
 - **Fix DB lookup after VFS remount** — canonicalize project path before hashing, so index survives arc remount
