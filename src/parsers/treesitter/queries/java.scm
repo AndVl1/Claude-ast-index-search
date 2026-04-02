@@ -2,6 +2,10 @@
 (class_declaration
   name: (identifier) @class_name) @class_node
 
+; Records (index as class-like types)
+(record_declaration
+  name: (identifier) @class_name) @class_node
+
 ; Interfaces
 (interface_declaration
   name: (identifier) @interface_name) @interface_node

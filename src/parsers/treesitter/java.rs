@@ -222,10 +222,13 @@ impl LanguageParser for JavaParser {
     }
 }
 
-/// Check if a node is inside a class_body, interface_body, or enum_body
+/// Check if a node is inside a class/interface/enum/record body
 fn is_inside_type_body(node: &tree_sitter::Node) -> bool {
     node.parent()
-        .map(|p| matches!(p.kind(), "class_body" | "interface_body" | "enum_body" | "enum_body_declarations"))
+        .map(|p| matches!(
+            p.kind(),
+            "class_body" | "interface_body" | "enum_body" | "enum_body_declarations" | "record_body"
+        ))
         .unwrap_or(false)
 }
 
@@ -509,5 +512,18 @@ public class Foo {
         let cls = symbols.iter().find(|s| s.name == "UserRepo").unwrap();
         assert!(cls.parents.iter().any(|(p, k)| p == "CrudRepository" && k == "extends"));
         assert!(cls.parents.iter().any(|(p, k)| p == "UserRepository" && k == "implements"));
+    }
+
+    #[test]
+    fn test_parse_record() {
+        let content = r#"public record UserDto(String id, String name) implements Serializable {
+    public String displayName() { return name; }
+}
+"#;
+        let symbols = JAVA_PARSER.parse_symbols(content).unwrap();
+        let rec = symbols.iter().find(|s| s.name == "UserDto").unwrap();
+        assert_eq!(rec.kind, SymbolKind::Class);
+        assert!(rec.parents.iter().any(|(p, k)| p == "Serializable" && k == "implements"));
+        assert!(symbols.iter().any(|s| s.name == "displayName" && s.kind == SymbolKind::Function));
     }
 }
