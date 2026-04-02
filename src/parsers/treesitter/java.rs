@@ -188,12 +188,25 @@ impl LanguageParser for JavaParser {
                 if find_capture(m, idx_record_component_node).is_some() {
                     let name = node_text(content, &name_cap.node);
                     let line = node_line(&name_cap.node);
+
+                    // Record components are class-like fields
                     if emitted.insert((name.to_string(), line)) {
                         symbols.push(ParsedSymbol {
                             name: name.to_string(),
                             kind: SymbolKind::Property,
                             line,
                             signature: line_text(content, line).trim().to_string(),
+                            parents: vec![],
+                        });
+                    }
+
+                    // Java records also synthesize a public accessor method with the same name.
+                    if emitted.insert((format!("{}#record_accessor", name), line)) {
+                        symbols.push(ParsedSymbol {
+                            name: name.to_string(),
+                            kind: SymbolKind::Function,
+                            line,
+                            signature: format!("{}()", name),
                             parents: vec![],
                         });
                     }
@@ -547,5 +560,7 @@ public class Foo {
         assert!(symbols.iter().any(|s| s.name == "displayName" && s.kind == SymbolKind::Function));
         assert!(symbols.iter().any(|s| s.name == "id" && s.kind == SymbolKind::Property));
         assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "id" && s.kind == SymbolKind::Function));
+        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Function));
     }
 }
