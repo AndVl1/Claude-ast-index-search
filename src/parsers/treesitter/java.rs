@@ -56,6 +56,8 @@ impl LanguageParser for JavaParser {
         let idx_constructor_node = idx("constructor_node");
         let idx_field_name = idx("field_name");
         let idx_field_node = idx("field_node");
+        let idx_record_component_name = idx("record_component_name");
+        let idx_record_component_node = idx("record_component_node");
         let idx_annotation_name = idx("annotation_name");
         let idx_annotation_call_name = idx("annotation_call_name");
 
@@ -176,6 +178,24 @@ impl LanguageParser for JavaParser {
                                 parents: vec![],
                             });
                         }
+                    }
+                }
+                continue;
+            }
+
+            // === Record components (header parameters in record declarations) ===
+            if let Some(name_cap) = find_capture(m, idx_record_component_name) {
+                if find_capture(m, idx_record_component_node).is_some() {
+                    let name = node_text(content, &name_cap.node);
+                    let line = node_line(&name_cap.node);
+                    if emitted.insert((name.to_string(), line)) {
+                        symbols.push(ParsedSymbol {
+                            name: name.to_string(),
+                            kind: SymbolKind::Property,
+                            line,
+                            signature: line_text(content, line).trim().to_string(),
+                            parents: vec![],
+                        });
                     }
                 }
                 continue;
@@ -525,5 +545,7 @@ public class Foo {
         assert_eq!(rec.kind, SymbolKind::Class);
         assert!(rec.parents.iter().any(|(p, k)| p == "Serializable" && k == "implements"));
         assert!(symbols.iter().any(|s| s.name == "displayName" && s.kind == SymbolKind::Function));
+        assert!(symbols.iter().any(|s| s.name == "id" && s.kind == SymbolKind::Property));
+        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property));
     }
 }
