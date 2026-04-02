@@ -1,4 +1,4 @@
-# ast-index v3.33.0
+# ast-index v3.33.1
 
 Fast code search CLI for 30 programming languages. Native Rust implementation.
 
@@ -423,6 +423,9 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.33.1
+- **parent_id for class members (Java)** — methods, constructors, fields and properties now have `parent_id` pointing to their enclosing class/interface/enum. Works with annotated classes. Other languages will follow.
 
 ### 3.33.0
 - **Fix DB lookup after VFS remount** — canonicalize project path before hashing, so index survives arc remount
