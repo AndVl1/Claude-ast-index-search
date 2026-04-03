@@ -32,7 +32,7 @@ pub mod typescript;
 use anyhow::Result;
 use tree_sitter::{Language, Parser, Tree};
 
-use super::{ParsedSymbol, ParsedRef, extract_references, extract_references_for_lang, FileType};
+use super::{extract_references, extract_references_for_lang, FileType, ParsedRef, ParsedSymbol};
 
 /// Trait for tree-sitter based language parsers
 pub trait LanguageParser: Send + Sync {
@@ -47,7 +47,12 @@ pub trait LanguageParser: Send + Sync {
 
     /// Extract references with language-specific keyword filtering.
     /// Parsers that override extract_refs get their custom logic; others get language-aware filtering.
-    fn extract_refs_for_lang(&self, content: &str, defined: &[ParsedSymbol], file_type: FileType) -> Result<Vec<ParsedRef>> {
+    fn extract_refs_for_lang(
+        &self,
+        content: &str,
+        defined: &[ParsedSymbol],
+        file_type: FileType,
+    ) -> Result<Vec<ParsedRef>> {
         extract_references_for_lang(content, defined, Some(file_type))
     }
 }
@@ -88,8 +93,11 @@ pub fn get_treesitter_parser(file_type: FileType) -> Option<&'static dyn Languag
 fn parse_tree(content: &str, language: &Language) -> Result<Tree> {
     PARSER.with(|p| {
         let mut parser = p.borrow_mut();
-        parser.set_language(language).map_err(|e| anyhow::anyhow!("Failed to set language: {}", e))?;
-        parser.parse(content, None)
+        parser
+            .set_language(language)
+            .map_err(|e| anyhow::anyhow!("Failed to set language: {}", e))?;
+        parser
+            .parse(content, None)
             .ok_or_else(|| anyhow::anyhow!("tree-sitter parse returned None"))
     })
 }

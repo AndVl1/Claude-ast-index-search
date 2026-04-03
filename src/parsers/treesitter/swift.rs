@@ -1,12 +1,12 @@
 //! Tree-sitter based Swift parser
 
 use anyhow::Result;
-use tree_sitter::{Language, Query, QueryCursor, StreamingIterator};
 use std::sync::LazyLock;
+use tree_sitter::{Language, Query, QueryCursor, StreamingIterator};
 
+use super::{line_text, node_line, node_text, parse_tree, LanguageParser};
 use crate::db::SymbolKind;
 use crate::parsers::ParsedSymbol;
-use super::{LanguageParser, parse_tree, node_text, node_line, line_text};
 
 static SWIFT_LANGUAGE: LazyLock<Language> = LazyLock::new(|| tree_sitter_swift::LANGUAGE.into());
 
@@ -29,7 +29,10 @@ impl LanguageParser for SwiftParser {
         // Build capture name -> index map
         let capture_names = query.capture_names();
         let idx = |name: &str| -> Option<u32> {
-            capture_names.iter().position(|n| *n == name).map(|i| i as u32)
+            capture_names
+                .iter()
+                .position(|n| *n == name)
+                .map(|i| i as u32)
         };
 
         let idx_decl_kind = idx("decl_kind");
@@ -212,7 +215,11 @@ impl LanguageParser for SwiftParser {
 /// Collect parent types by walking a declaration node's inheritance_specifier children.
 /// If `all_implements` is true (structs, enums, actors, protocols), all parents are "implements".
 /// Otherwise (classes), the first parent is "extends" and the rest are "implements".
-fn collect_parents_from_node(node: &tree_sitter::Node, content: &str, all_implements: bool) -> Vec<(String, String)> {
+fn collect_parents_from_node(
+    node: &tree_sitter::Node,
+    content: &str,
+    all_implements: bool,
+) -> Vec<(String, String)> {
     let mut parents = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -239,8 +246,8 @@ fn extract_func_signature(content: &str, func_node: &tree_sitter::Node) -> Strin
     let lines: Vec<&str> = content.lines().collect();
 
     let mut sig_parts = Vec::new();
-    for i in start.row..=end.row.min(lines.len().saturating_sub(1)) {
-        let line = lines[i].trim();
+    for line in &lines[start.row..=end.row.min(lines.len().saturating_sub(1))] {
+        let line = line.trim();
         // Stop at the body opening brace
         if let Some(brace_pos) = line.find('{') {
             let before = line[..brace_pos].trim();
@@ -256,7 +263,10 @@ fn extract_func_signature(content: &str, func_node: &tree_sitter::Node) -> Strin
 
     let sig = sig_parts.join(" ");
     if sig.is_empty() {
-        lines.get(start.row).map(|l| l.trim().to_string()).unwrap_or_default()
+        lines
+            .get(start.row)
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default()
     } else {
         sig
     }
@@ -432,8 +442,14 @@ mod tests {
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
         let cls = symbols.iter().find(|s| s.name == "AppDelegate").unwrap();
         assert_eq!(cls.kind, SymbolKind::Class);
-        assert!(cls.parents.iter().any(|(p, k)| p == "UIResponder" && k == "extends"));
-        assert!(cls.parents.iter().any(|(p, k)| p == "UIApplicationDelegate" && k == "implements"));
+        assert!(cls
+            .parents
+            .iter()
+            .any(|(p, k)| p == "UIResponder" && k == "extends"));
+        assert!(cls
+            .parents
+            .iter()
+            .any(|(p, k)| p == "UIApplicationDelegate" && k == "implements"));
     }
 
     #[test]
@@ -472,11 +488,18 @@ mod tests {
 
     #[test]
     fn test_parse_extension() {
-        let content = "extension String: CustomProtocol {\n    func trimmed() -> String { self }\n}\n";
+        let content =
+            "extension String: CustomProtocol {\n    func trimmed() -> String { self }\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        let ext = symbols.iter().find(|s| s.name == "String+Extension").unwrap();
+        let ext = symbols
+            .iter()
+            .find(|s| s.name == "String+Extension")
+            .unwrap();
         assert_eq!(ext.kind, SymbolKind::Object);
-        assert!(ext.parents.iter().any(|(p, k)| p == "String" && k == "extends"));
+        assert!(ext
+            .parents
+            .iter()
+            .any(|(p, k)| p == "String" && k == "extends"));
     }
 
     #[test]
@@ -489,18 +512,27 @@ mod tests {
 
     #[test]
     fn test_parse_init() {
-        let content = "class Foo {\n    public init(name: String) {\n        self.name = name\n    }\n}\n";
+        let content =
+            "class Foo {\n    public init(name: String) {\n        self.name = name\n    }\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        assert!(symbols.iter().any(|s| s.name == "init" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "init" && s.kind == SymbolKind::Function));
     }
 
     #[test]
     fn test_parse_property() {
         let content = "class Foo {\n    var name: String = \"\"\n    let count: Int = 0\n    static var shared: Foo = Foo()\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property));
-        assert!(symbols.iter().any(|s| s.name == "count" && s.kind == SymbolKind::Property));
-        assert!(symbols.iter().any(|s| s.name == "shared" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "name" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "count" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "shared" && s.kind == SymbolKind::Property));
     }
 
     #[test]
@@ -515,7 +547,9 @@ mod tests {
     fn test_parse_nested_function() {
         let content = "class ViewController {\n    func loadData() async throws -> Data {\n        fatalError()\n    }\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        assert!(symbols.iter().any(|s| s.name == "loadData" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "loadData" && s.kind == SymbolKind::Function));
     }
 
     #[test]
@@ -555,8 +589,11 @@ mod tests {
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
         let s = symbols.iter().find(|s| s.name == "User").unwrap();
         // Both should be "implements", not first="extends"
-        assert!(s.parents.iter().all(|(_, k)| k == "implements"),
-            "struct parents should all be 'implements', got: {:?}", s.parents);
+        assert!(
+            s.parents.iter().all(|(_, k)| k == "implements"),
+            "struct parents should all be 'implements', got: {:?}",
+            s.parents
+        );
     }
 
     #[test]
@@ -565,8 +602,11 @@ mod tests {
         let content = "enum Direction: String, CaseIterable {\n    case north\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
         let e = symbols.iter().find(|s| s.name == "Direction").unwrap();
-        assert!(e.parents.iter().all(|(_, k)| k == "implements"),
-            "enum parents should all be 'implements', got: {:?}", e.parents);
+        assert!(
+            e.parents.iter().all(|(_, k)| k == "implements"),
+            "enum parents should all be 'implements', got: {:?}",
+            e.parents
+        );
     }
 
     #[test]
@@ -575,8 +615,11 @@ mod tests {
         let content = "actor DataStore: Sendable, CustomStringConvertible {\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
         let a = symbols.iter().find(|s| s.name == "DataStore").unwrap();
-        assert!(a.parents.iter().all(|(_, k)| k == "implements"),
-            "actor parents should all be 'implements', got: {:?}", a.parents);
+        assert!(
+            a.parents.iter().all(|(_, k)| k == "implements"),
+            "actor parents should all be 'implements', got: {:?}",
+            a.parents
+        );
     }
 
     // === Issue #4: Signature is single-line ===
@@ -594,8 +637,11 @@ public func configure(
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
         let f = symbols.iter().find(|s| s.name == "configure").unwrap();
         // Signature should contain the full declaration, not just the first line
-        assert!(f.signature.contains("animated: Bool"),
-            "signature should include all parameters, got: {:?}", f.signature);
+        assert!(
+            f.signature.contains("animated: Bool"),
+            "signature should include all parameters, got: {:?}",
+            f.signature
+        );
     }
 
     #[test]
@@ -611,10 +657,16 @@ protocol Service {
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
         let f = symbols.iter().find(|s| s.name == "fetchItems").unwrap();
         // Protocol functions have no body — signature should still capture all parameters
-        assert!(f.signature.contains("limit: Int"),
-            "protocol func signature should include all parameters, got: {:?}", f.signature);
-        assert!(f.signature.contains("async throws"),
-            "protocol func signature should include async throws, got: {:?}", f.signature);
+        assert!(
+            f.signature.contains("limit: Int"),
+            "protocol func signature should include all parameters, got: {:?}",
+            f.signature
+        );
+        assert!(
+            f.signature.contains("async throws"),
+            "protocol func signature should include async throws, got: {:?}",
+            f.signature
+        );
     }
 
     // === Issue #8: Extension conformances not captured ===
@@ -623,12 +675,21 @@ protocol Service {
     fn test_extension_conformances_captured() {
         let content = "extension MyStruct: Codable, Equatable {\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        let ext = symbols.iter().find(|s| s.name == "MyStruct+Extension").unwrap();
+        let ext = symbols
+            .iter()
+            .find(|s| s.name == "MyStruct+Extension")
+            .unwrap();
         // Extension should record all protocol conformances, not just the base type
-        assert!(ext.parents.iter().any(|(p, _)| p == "Codable"),
-            "extension should capture Codable conformance, got: {:?}", ext.parents);
-        assert!(ext.parents.iter().any(|(p, _)| p == "Equatable"),
-            "extension should capture Equatable conformance, got: {:?}", ext.parents);
+        assert!(
+            ext.parents.iter().any(|(p, _)| p == "Codable"),
+            "extension should capture Codable conformance, got: {:?}",
+            ext.parents
+        );
+        assert!(
+            ext.parents.iter().any(|(p, _)| p == "Equatable"),
+            "extension should capture Equatable conformance, got: {:?}",
+            ext.parents
+        );
     }
 
     #[test]
@@ -650,16 +711,38 @@ typealias Completion = (Result<Data, Error>) -> Void
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
 
         // Check that all major declarations are found
-        assert!(symbols.iter().any(|s| s.name == "ViewController" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Direction" && s.kind == SymbolKind::Enum));
-        assert!(symbols.iter().any(|s| s.name == "Fetchable" && s.kind == SymbolKind::Interface));
-        assert!(symbols.iter().any(|s| s.name == "DataStore" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "String+Extension" && s.kind == SymbolKind::Object));
-        assert!(symbols.iter().any(|s| s.name == "Completion" && s.kind == SymbolKind::TypeAlias));
-        assert!(symbols.iter().any(|s| s.name == "loadData" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "init" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property));
-        assert!(symbols.iter().any(|s| s.name == "count" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "ViewController" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Direction" && s.kind == SymbolKind::Enum));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Fetchable" && s.kind == SymbolKind::Interface));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "DataStore" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "String+Extension" && s.kind == SymbolKind::Object));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Completion" && s.kind == SymbolKind::TypeAlias));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "loadData" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "init" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "name" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "count" && s.kind == SymbolKind::Property));
     }
 }

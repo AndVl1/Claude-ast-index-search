@@ -16,8 +16,8 @@ use anyhow::Result;
 use colored::Colorize;
 use regex::Regex;
 
+use super::{relative_path, search_files};
 use crate::db;
-use super::{search_files, relative_path};
 
 /// Find storyboard usages of a class
 pub fn cmd_storyboard_usages(root: &Path, class_name: &str, module: Option<&str>) -> Result<()> {
@@ -35,10 +35,12 @@ pub fn cmd_storyboard_usages(root: &Path, class_name: &str, module: Option<&str>
 
     let class_like = format!("%{}%", class_name);
 
-    let results: Vec<(String, i64, String, Option<String>, Option<String>)> = if let Some(m) = module {
-        let mod_like = format!("%{}%", m);
-        let mut stmt = conn.prepare(
-            r#"
+    #[allow(clippy::type_complexity)]
+    let results: Vec<(String, i64, String, Option<String>, Option<String>)> =
+        if let Some(m) = module {
+            let mod_like = format!("%{}%", m);
+            let mut stmt = conn.prepare(
+                r#"
             SELECT su.file_path, su.line, su.class_name, su.usage_type, su.storyboard_id
             FROM storyboard_usages su
             LEFT JOIN modules mod ON su.module_id = mod.id
@@ -46,41 +48,73 @@ pub fn cmd_storyboard_usages(root: &Path, class_name: &str, module: Option<&str>
             AND (mod.name LIKE ?2 OR mod.path LIKE ?2)
             ORDER BY su.file_path, su.line
             "#,
-        )?;
-        let rows: Vec<_> = stmt.query_map(rusqlite::params![class_like, mod_like], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-        rows
-    } else {
-        let mut stmt = conn.prepare(
-            r#"
+            )?;
+            let rows: Vec<_> = stmt
+                .query_map(rusqlite::params![class_like, mod_like], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows
+        } else {
+            let mut stmt = conn.prepare(
+                r#"
             SELECT file_path, line, class_name, usage_type, storyboard_id
             FROM storyboard_usages
             WHERE class_name LIKE ?1
             ORDER BY file_path, line
             "#,
-        )?;
-        let rows: Vec<_> = stmt.query_map(rusqlite::params![class_like], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
-        rows
-    };
+            )?;
+            let rows: Vec<_> = stmt
+                .query_map(rusqlite::params![class_like], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows
+        };
 
     if results.is_empty() {
-        println!("{}", format!("No storyboard usages found for '{}'", class_name).yellow());
+        println!(
+            "{}",
+            format!("No storyboard usages found for '{}'", class_name).yellow()
+        );
     } else {
         println!(
             "{}",
-            format!("Storyboard usages for '{}' ({}):", class_name, results.len()).bold()
+            format!(
+                "Storyboard usages for '{}' ({}):",
+                class_name,
+                results.len()
+            )
+            .bold()
         );
         for (path, line, cls, usage_type, sb_id) in &results {
             let type_str = usage_type.as_deref().unwrap_or("unknown");
-            let id_str = sb_id.as_deref().map(|s| format!(" (id: {})", s)).unwrap_or_default();
-            println!("  {}:{} {} [{}]{}", path.cyan(), line, cls, type_str, id_str);
+            let id_str = sb_id
+                .as_deref()
+                .map(|s| format!(" (id: {})", s))
+                .unwrap_or_default();
+            println!(
+                "  {}:{} {} [{}]{}",
+                path.cyan(),
+                line,
+                cls,
+                type_str,
+                id_str
+            );
         }
     }
 
@@ -89,7 +123,13 @@ pub fn cmd_storyboard_usages(root: &Path, class_name: &str, module: Option<&str>
 }
 
 /// Find iOS asset usages
-pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_type: Option<&str>, unused: bool) -> Result<()> {
+pub fn cmd_asset_usages(
+    root: &Path,
+    asset: &str,
+    module: Option<&str>,
+    asset_type: Option<&str>,
+    unused: bool,
+) -> Result<()> {
     let start = Instant::now();
 
     if !db::db_exists(root) {
@@ -112,9 +152,10 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
         let m = module.unwrap();
         let mod_like = format!("%{}%", m);
 
-        let (query, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(t) = asset_type {
-            (
-                r#"
+        let (query, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) =
+            if let Some(t) = asset_type {
+                (
+                    r#"
                 SELECT a.name, a.type, a.file_path
                 FROM ios_assets a
                 LEFT JOIN modules mod ON a.module_id = mod.id
@@ -124,11 +165,14 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
                 AND a.type = ?2
                 ORDER BY a.type, a.name
                 "#,
-                vec![Box::new(mod_like) as Box<dyn rusqlite::types::ToSql>, Box::new(t.to_string())],
-            )
-        } else {
-            (
-                r#"
+                    vec![
+                        Box::new(mod_like) as Box<dyn rusqlite::types::ToSql>,
+                        Box::new(t.to_string()),
+                    ],
+                )
+            } else {
+                (
+                    r#"
                 SELECT a.name, a.type, a.file_path
                 FROM ios_assets a
                 LEFT JOIN modules mod ON a.module_id = mod.id
@@ -137,19 +181,24 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
                 AND au.id IS NULL
                 ORDER BY a.type, a.name
                 "#,
-                vec![Box::new(mod_like) as Box<dyn rusqlite::types::ToSql>],
-            )
-        };
+                    vec![Box::new(mod_like) as Box<dyn rusqlite::types::ToSql>],
+                )
+            };
 
         let mut stmt = conn.prepare(query)?;
         let results: Vec<(String, String, String)> = stmt
-            .query_map(rusqlite::params_from_iter(params.iter()), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
 
         if results.is_empty() {
-            println!("{}", format!("No unused assets found in module '{}'", m).green());
+            println!(
+                "{}",
+                format!("No unused assets found in module '{}'", m).green()
+            );
         } else {
             println!(
                 "{}",
@@ -165,10 +214,12 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
             let mut stmt = conn.prepare(
                 "SELECT name, type, file_path FROM ios_assets WHERE type = ?1 ORDER BY type, name LIMIT 100",
             )?;
-            stmt.query_map(rusqlite::params![t], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-                .unwrap()
-                .filter_map(|r| r.ok())
-                .collect()
+            stmt.query_map(rusqlite::params![t], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect()
         } else {
             let mut stmt = conn.prepare(
                 "SELECT name, type, file_path FROM ios_assets ORDER BY type, name LIMIT 100",
@@ -196,13 +247,18 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
             "#,
         )?;
         let results: Vec<(String, String, String, i64)> = stmt
-            .query_map(rusqlite::params![asset_like], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .query_map(rusqlite::params![asset_like], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
 
         if results.is_empty() {
-            println!("{}", format!("No usages found for asset '{}'", asset).yellow());
+            println!(
+                "{}",
+                format!("No usages found for asset '{}'", asset).yellow()
+            );
         } else {
             println!(
                 "{}",
@@ -226,10 +282,16 @@ pub fn cmd_swiftui(root: &Path, query: Option<&str>, limit: usize) -> Result<()>
     let start = Instant::now();
 
     // Use grep to find candidate files (fast), then tree-sitter for precise extraction
-    let mut swift_files: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
-    search_files(root, r"@\w+.*\b(var|let)\b", &["swift"], |path, _line_num, _line| {
-        swift_files.insert(path.to_path_buf());
-    })?;
+    let mut swift_files: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+    search_files(
+        root,
+        r"@\w+.*\b(var|let)\b",
+        &["swift"],
+        |path, _line_num, _line| {
+            swift_files.insert(path.to_path_buf());
+        },
+    )?;
 
     let mut results: Vec<(String, String, String, usize)> = vec![];
 
@@ -275,7 +337,11 @@ pub fn cmd_swiftui(root: &Path, query: Option<&str>, limit: usize) -> Result<()>
     }
 
     for (prop_type, props) in &by_type {
-        println!("\n  {} ({}):", format!("@{}", prop_type).cyan(), props.len());
+        println!(
+            "\n  {} ({}):",
+            format!("@{}", prop_type).cyan(),
+            props.len()
+        );
         for (name, path, line) in props.iter().take(10) {
             println!("    {}: {}:{}", name, path, line);
         }
@@ -298,7 +364,8 @@ pub fn cmd_async_funcs(root: &Path, query: Option<&str>, limit: usize) -> Result
     let mut results: Vec<(String, String, usize)> = vec![];
 
     // Use grep to find candidate files (fast), then tree-sitter for precise extraction
-    let mut swift_files: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    let mut swift_files: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
     search_files(root, r"\basync\b", &["swift"], |path, _line_num, _line| {
         swift_files.insert(path.to_path_buf());
     })?;
@@ -327,10 +394,7 @@ pub fn cmd_async_funcs(root: &Path, query: Option<&str>, limit: usize) -> Result
         }
     }
 
-    println!(
-        "{}",
-        format!("Async functions ({}):", results.len()).bold()
-    );
+    println!("{}", format!("Async functions ({}):", results.len()).bold());
 
     for (func_name, path, line_num) in &results {
         println!("  {}: {}:{}", func_name.cyan(), path, line_num);
@@ -347,7 +411,9 @@ pub fn cmd_publishers(root: &Path, query: Option<&str>, limit: usize) -> Result<
     // Search for Combine publishers: PassthroughSubject, CurrentValueSubject, AnyPublisher, Published
     let pattern = r"(PassthroughSubject|CurrentValueSubject|AnyPublisher|@Published)\s*[<(]";
 
-    let pub_regex = Regex::new(r"(PassthroughSubject|CurrentValueSubject|AnyPublisher)(?:\s*<[^>]+>)?\s*(?:\(\)|[,;=])|@Published\s+(?:private\s+)?var\s+(\w+)")?;
+    let pub_regex = Regex::new(
+        r"(PassthroughSubject|CurrentValueSubject|AnyPublisher)(?:\s*<[^>]+>)?\s*(?:\(\)|[,;=])|@Published\s+(?:private\s+)?var\s+(\w+)",
+    )?;
 
     let mut results: Vec<(String, String, String, usize)> = vec![];
 

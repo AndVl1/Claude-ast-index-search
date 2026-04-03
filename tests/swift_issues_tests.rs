@@ -19,14 +19,16 @@ fn try_storyboard_query(class_name: &str) -> Result<(), Option<String>> {
 
     // Use parameterized query (as the fixed cmd_storyboard_usages does)
     let class_like = format!("%{}%", class_name);
-    let mut stmt = conn.prepare(
-        r#"
+    let mut stmt = conn
+        .prepare(
+            r#"
         SELECT file_path, line, class_name, usage_type, storyboard_id
         FROM storyboard_usages
         WHERE class_name LIKE ?1
         ORDER BY file_path, line
         "#,
-    ).map_err(|e| Some(format!("{}", e)))?;
+        )
+        .map_err(|e| Some(format!("{}", e)))?;
 
     let results: Vec<(String, i64, String)> = stmt
         .query_map(rusqlite::params![class_like], |row| {
@@ -38,7 +40,10 @@ fn try_storyboard_query(class_name: &str) -> Result<(), Option<String>> {
 
     // Verify the query actually found the inserted row
     if results.is_empty() {
-        return Err(Some(format!("No results found for class_name '{}'", class_name)));
+        return Err(Some(format!(
+            "No results found for class_name '{}'",
+            class_name
+        )));
     }
 
     Ok(())
@@ -66,9 +71,14 @@ struct SettingsView: View {
     let wrappers = ast_index::parsers::treesitter::swift::find_property_wrappers(content).unwrap();
 
     assert!(
-        wrappers.iter().any(|w| w.wrapper == "Environment" && w.name == "dismiss"),
+        wrappers
+            .iter()
+            .any(|w| w.wrapper == "Environment" && w.name == "dismiss"),
         "@Environment should be found by tree-sitter. Found: {:?}",
-        wrappers.iter().map(|w| (&w.wrapper, &w.name)).collect::<Vec<_>>()
+        wrappers
+            .iter()
+            .map(|w| (&w.wrapper, &w.name))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -95,9 +105,14 @@ struct ContentView: View {
     let wrappers = ast_index::parsers::treesitter::swift::find_property_wrappers(content).unwrap();
 
     assert!(
-        wrappers.iter().any(|w| w.wrapper == "Bindable" && w.name == "model"),
+        wrappers
+            .iter()
+            .any(|w| w.wrapper == "Bindable" && w.name == "model"),
         "@Bindable should be found by tree-sitter. Found: {:?}",
-        wrappers.iter().map(|w| (&w.wrapper, &w.name)).collect::<Vec<_>>()
+        wrappers
+            .iter()
+            .map(|w| (&w.wrapper, &w.name))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -119,14 +134,24 @@ struct SettingsView: View {
     let wrappers = ast_index::parsers::treesitter::swift::find_property_wrappers(content).unwrap();
 
     assert!(
-        wrappers.iter().any(|w| w.wrapper == "AppStorage" && w.name == "username"),
+        wrappers
+            .iter()
+            .any(|w| w.wrapper == "AppStorage" && w.name == "username"),
         "@AppStorage should be found by tree-sitter. Found: {:?}",
-        wrappers.iter().map(|w| (&w.wrapper, &w.name)).collect::<Vec<_>>()
+        wrappers
+            .iter()
+            .map(|w| (&w.wrapper, &w.name))
+            .collect::<Vec<_>>()
     );
     assert!(
-        wrappers.iter().any(|w| w.wrapper == "SceneStorage" && w.name == "selectedTab"),
+        wrappers
+            .iter()
+            .any(|w| w.wrapper == "SceneStorage" && w.name == "selectedTab"),
         "@SceneStorage should be found by tree-sitter. Found: {:?}",
-        wrappers.iter().map(|w| (&w.wrapper, &w.name)).collect::<Vec<_>>()
+        wrappers
+            .iter()
+            .map(|w| (&w.wrapper, &w.name))
+            .collect::<Vec<_>>()
     );
 }
 
@@ -183,7 +208,8 @@ fn test_storyboard_query_with_module_sql_injection() {
     conn.execute(
         "INSERT INTO modules (id, name, path, kind) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![1, "O'Malley", "Modules/O'Malley", "framework"],
-    ).unwrap();
+    )
+    .unwrap();
     conn.execute(
         "INSERT INTO storyboard_usages (file_path, line, class_name, usage_type, module_id) VALUES (?1, ?2, ?3, ?4, ?5)",
         rusqlite::params!["Main.storyboard", 5, "O'BrienVC", "viewController", 1],
@@ -192,8 +218,9 @@ fn test_storyboard_query_with_module_sql_injection() {
     // Parameterized query matching the module branch of cmd_storyboard_usages
     let class_like = format!("%{}%", "O'Brien");
     let mod_like = format!("%{}%", "O'Malley");
-    let mut stmt = conn.prepare(
-        r#"
+    let mut stmt = conn
+        .prepare(
+            r#"
         SELECT su.file_path, su.line, su.class_name, su.usage_type, su.storyboard_id
         FROM storyboard_usages su
         LEFT JOIN modules mod ON su.module_id = mod.id
@@ -201,7 +228,8 @@ fn test_storyboard_query_with_module_sql_injection() {
         AND (mod.name LIKE ?2 OR mod.path LIKE ?2)
         ORDER BY su.file_path, su.line
         "#,
-    ).expect("prepare should succeed with parameterized query");
+        )
+        .expect("prepare should succeed with parameterized query");
 
     let results: Vec<String> = stmt
         .query_map(rusqlite::params![class_like, mod_like], |row| row.get(2))
@@ -209,7 +237,11 @@ fn test_storyboard_query_with_module_sql_injection() {
         .filter_map(|r| r.ok())
         .collect();
 
-    assert_eq!(results.len(), 1, "should find the row with single-quotes in both class and module");
+    assert_eq!(
+        results.len(),
+        1,
+        "should find the row with single-quotes in both class and module"
+    );
     assert_eq!(results[0], "O'BrienVC");
 }
 
@@ -221,11 +253,19 @@ fn test_asset_unused_query_sql_injection() {
     conn.execute(
         "INSERT INTO modules (id, name, path, kind) VALUES (?1, ?2, ?3, ?4)",
         rusqlite::params![1, "App's Core", "Modules/App's Core", "framework"],
-    ).unwrap();
+    )
+    .unwrap();
     conn.execute(
         "INSERT INTO ios_assets (id, module_id, type, name, file_path) VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![1, 1, "imageset", "icon_o'reilly", "Assets.xcassets/icon.imageset"],
-    ).unwrap();
+        rusqlite::params![
+            1,
+            1,
+            "imageset",
+            "icon_o'reilly",
+            "Assets.xcassets/icon.imageset"
+        ],
+    )
+    .unwrap();
     // No usage row → asset is unused
 
     // Parameterized query matching the unused-assets branch of cmd_asset_usages
@@ -239,7 +279,9 @@ fn test_asset_unused_query_sql_injection() {
         AND au.id IS NULL
         ORDER BY a.type, a.name
     "#;
-    let mut stmt = conn.prepare(query_no_type).expect("prepare without type filter should succeed");
+    let mut stmt = conn
+        .prepare(query_no_type)
+        .expect("prepare without type filter should succeed");
     let results: Vec<String> = stmt
         .query_map(rusqlite::params![mod_like], |row| row.get(0))
         .unwrap()
@@ -258,7 +300,9 @@ fn test_asset_unused_query_sql_injection() {
         AND a.type = ?2
         ORDER BY a.type, a.name
     "#;
-    let mut stmt = conn.prepare(query_with_type).expect("prepare with type filter should succeed");
+    let mut stmt = conn
+        .prepare(query_with_type)
+        .expect("prepare with type filter should succeed");
     let results: Vec<String> = stmt
         .query_map(rusqlite::params![mod_like, "imageset"], |row| row.get(0))
         .unwrap()
@@ -275,7 +319,8 @@ fn test_asset_list_query_sql_injection() {
     conn.execute(
         "INSERT INTO ios_assets (type, name, file_path) VALUES (?1, ?2, ?3)",
         rusqlite::params!["image'set", "icon_test", "Assets.xcassets/icon.imageset"],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Parameterized query matching the list-all-assets branch with type filter
     let mut stmt = conn.prepare(
@@ -318,7 +363,11 @@ fn test_asset_query_sql_injection() {
     // Insert test data
     conn.execute(
         "INSERT INTO ios_assets (type, name, file_path) VALUES (?1, ?2, ?3)",
-        rusqlite::params!["imageset", "icon_test", "Assets.xcassets/icon_test.imageset"],
+        rusqlite::params![
+            "imageset",
+            "icon_test",
+            "Assets.xcassets/icon_test.imageset"
+        ],
     )
     .unwrap();
 
