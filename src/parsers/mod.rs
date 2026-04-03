@@ -1014,4 +1014,51 @@ mod tests {
         let content = "% comment\nfunctionality = 5;\n";
         assert_eq!(FileType::detect_m_file_type(content), FileType::Matlab);
     }
+
+    // === Issue #2: .h files always parsed as C++, not ObjC ===
+
+    #[test]
+    fn test_h_file_with_objc_parsed_as_objc() {
+        // In an iOS project, .h files with @interface should be parsed as ObjC
+        let content = "#import <Foundation/Foundation.h>\n@interface MyClass : NSObject\n@end\n";
+        // FileType::from_extension("h") returns Cpp, but this is clearly ObjC
+        // A content-based sniff (like .m files get) should detect ObjC
+        let file_type = FileType::from_extension("h").unwrap();
+        let (symbols, _) = parse_file_symbols(content, file_type).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "MyClass" && s.kind == SymbolKind::Class),
+            "ObjC @interface in .h file should be parsed correctly, got: {:?}", symbols);
+    }
+
+    // === Issue #3: Reference extraction is Kotlin-centric ===
+
+    #[test]
+    fn test_extract_references_skips_swift_keywords() {
+        // Swift keywords that are not in the skip list should still be skipped
+        let content = "guard let value = Optional else { return }\n";
+        let symbols = vec![];
+        let refs = extract_references(content, &symbols).unwrap();
+        assert!(!refs.iter().any(|r| r.name == "Optional"),
+            "Optional should be skipped as Swift stdlib type, got refs: {:?}", refs);
+    }
+
+    #[test]
+    fn test_extract_references_skips_swift_stdlib_types() {
+        // Common Swift types that generate noise
+        let content = "let url: URL = URL(string: path)!\nlet data: Data = Data()\nlet void: Void = ()\n";
+        let symbols = vec![];
+        let refs = extract_references(content, &symbols).unwrap();
+        // These Swift stdlib types should be filtered out
+        assert!(!refs.iter().any(|r| r.name == "Void"),
+            "Void should be skipped as Swift stdlib type");
+    }
+
+    #[test]
+    fn test_extract_references_skips_testable_import() {
+        // @testable import lines should be skipped like regular imports
+        let content = "@testable import MyModule\n";
+        let symbols = vec![];
+        let refs = extract_references(content, &symbols).unwrap();
+        assert!(!refs.iter().any(|r| r.name == "MyModule"),
+            "@testable import should be skipped, got refs: {:?}", refs);
+    }
 }

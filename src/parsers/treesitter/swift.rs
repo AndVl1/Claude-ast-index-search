@@ -374,6 +374,72 @@ mod tests {
         assert!(cls.parents.is_empty());
     }
 
+    // === Issue #1: Incorrect parent classification for structs/enums ===
+
+    #[test]
+    fn test_struct_parents_all_implements() {
+        // Structs can't have superclasses — all parents are protocol conformances
+        let content = "struct User: Codable, Equatable {\n    let id: Int\n}\n";
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let s = symbols.iter().find(|s| s.name == "User").unwrap();
+        // Both should be "implements", not first="extends"
+        assert!(s.parents.iter().all(|(_, k)| k == "implements"),
+            "struct parents should all be 'implements', got: {:?}", s.parents);
+    }
+
+    #[test]
+    fn test_enum_raw_value_not_extends() {
+        // enum Foo: String — String is RawRepresentable conformance, not superclass
+        let content = "enum Direction: String, CaseIterable {\n    case north\n}\n";
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let e = symbols.iter().find(|s| s.name == "Direction").unwrap();
+        assert!(e.parents.iter().all(|(_, k)| k == "implements"),
+            "enum parents should all be 'implements', got: {:?}", e.parents);
+    }
+
+    #[test]
+    fn test_actor_parents_all_implements() {
+        // Actors can't inherit from classes — all parents are protocol conformances
+        let content = "actor DataStore: Sendable, CustomStringConvertible {\n}\n";
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let a = symbols.iter().find(|s| s.name == "DataStore").unwrap();
+        assert!(a.parents.iter().all(|(_, k)| k == "implements"),
+            "actor parents should all be 'implements', got: {:?}", a.parents);
+    }
+
+    // === Issue #4: Signature is single-line ===
+
+    #[test]
+    fn test_multiline_func_signature() {
+        let content = r#"
+public func configure(
+    with model: ViewModel,
+    animated: Bool
+) -> Result<Void, Error> {
+    fatalError()
+}
+"#;
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let f = symbols.iter().find(|s| s.name == "configure").unwrap();
+        // Signature should contain the full declaration, not just the first line
+        assert!(f.signature.contains("animated: Bool"),
+            "signature should include all parameters, got: {:?}", f.signature);
+    }
+
+    // === Issue #8: Extension conformances not captured ===
+
+    #[test]
+    fn test_extension_conformances_captured() {
+        let content = "extension MyStruct: Codable, Equatable {\n}\n";
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let ext = symbols.iter().find(|s| s.name == "MyStruct+Extension").unwrap();
+        // Extension should record all protocol conformances, not just the base type
+        assert!(ext.parents.iter().any(|(p, _)| p == "Codable"),
+            "extension should capture Codable conformance, got: {:?}", ext.parents);
+        assert!(ext.parents.iter().any(|(p, _)| p == "Equatable"),
+            "extension should capture Equatable conformance, got: {:?}", ext.parents);
+    }
+
     #[test]
     fn test_parse_multiple_declarations() {
         let content = r#"
