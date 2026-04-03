@@ -536,6 +536,23 @@ impl FileType {
     }
 }
 
+/// Detect whether a `.h` file contains Objective-C by looking for ObjC markers.
+fn detect_h_file_objc(content: &str) -> bool {
+    for line in content.lines().take(50) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("#import")
+            || trimmed.starts_with("@interface")
+            || trimmed.starts_with("@protocol")
+            || trimmed.starts_with("@property")
+            || trimmed.starts_with("@class")
+            || trimmed.starts_with("NS_ASSUME_NONNULL_BEGIN")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check if file extension is supported for indexing
 pub fn is_supported_extension(ext: &str) -> bool {
     FileType::from_extension(ext).is_some()
@@ -590,10 +607,17 @@ pub mod treesitter;
 /// Parse symbols and references from file content using FileType enum.
 /// Tries tree-sitter first for supported languages, falls back to regex.
 pub fn parse_file_symbols(content: &str, file_type: FileType) -> Result<(Vec<ParsedSymbol>, Vec<ParsedRef>)> {
+    // For .h files (mapped to Cpp), sniff content for ObjC markers and re-route
+    let effective_type = if file_type == FileType::Cpp && detect_h_file_objc(content) {
+        FileType::ObjC
+    } else {
+        file_type
+    };
+
     // Try tree-sitter parser first
-    if let Some(ts_parser) = treesitter::get_treesitter_parser(file_type) {
+    if let Some(ts_parser) = treesitter::get_treesitter_parser(effective_type) {
         let symbols = ts_parser.parse_symbols(content)?;
-        let refs = ts_parser.extract_refs(content, &symbols)?;
+        let refs = ts_parser.extract_refs_for_lang(content, &symbols, effective_type)?;
         return Ok((symbols, refs));
     }
 
@@ -623,6 +647,11 @@ pub fn parse_file_symbols(content: &str, file_type: FileType) -> Result<(Vec<Par
 
 /// Extract references/usages from file content
 pub fn extract_references(content: &str, defined_symbols: &[ParsedSymbol]) -> Result<Vec<ParsedRef>> {
+    extract_references_for_lang(content, defined_symbols, None)
+}
+
+/// Extract references/usages from file content, with optional language-specific filtering
+pub fn extract_references_for_lang(content: &str, defined_symbols: &[ParsedSymbol], file_type: Option<FileType>) -> Result<Vec<ParsedRef>> {
     let mut refs = Vec::new();
 
     // Build set of locally defined symbol names (to skip them)
@@ -638,24 +667,56 @@ pub fn extract_references(content: &str, defined_symbols: &[ParsedSymbol]) -> Re
 
     let func_call_re = &*FUNC_CALL_RE; // function calls
 
-    // Keywords to skip (static to avoid re-creating on every call)
-    static KEYWORDS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
+    // Common keywords to skip across all languages
+    static BASE_KEYWORDS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
         [
-            "if", "else", "when", "while", "for", "do", "try", "catch", "finally",
+            "if", "else", "while", "for", "do", "try", "catch", "finally",
             "return", "break", "continue", "throw", "is", "in", "as", "true", "false",
-            "null", "this", "super", "class", "interface", "object", "fun", "val", "var",
-            "import", "package", "private", "public", "protected", "internal", "override",
-            "abstract", "final", "open", "sealed", "data", "inner", "enum", "companion",
-            "lateinit", "const", "suspend", "inline", "crossinline", "noinline", "reified",
-            "annotation", "typealias", "get", "set", "init", "constructor", "by", "where",
-            // Common standard library that would create too much noise
-            "String", "Int", "Long", "Double", "Float", "Boolean", "Byte", "Short", "Char",
-            "Unit", "Any", "Nothing", "List", "Map", "Set", "Array", "Pair", "Triple",
-            "MutableList", "MutableMap", "MutableSet", "HashMap", "ArrayList", "HashSet",
-            "Exception", "Error", "Throwable", "Result", "Sequence",
+            "null", "this", "super", "class", "interface", "enum",
+            "import", "package", "private", "public", "protected",
+            "abstract", "final", "typealias", "get", "set", "init",
+            // Universal stdlib noise
+            "String", "Int", "Double", "Float", "Boolean", "Array", "Map", "Set", "List",
+            "Error", "Result",
         ].into_iter().collect()
     });
-    let keywords = &*KEYWORDS;
+
+    // Kotlin/Java-specific keywords and stdlib types
+    static KOTLIN_JAVA_KEYWORDS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
+        [
+            "when", "object", "fun", "val", "var", "internal", "override",
+            "open", "sealed", "data", "inner", "companion",
+            "lateinit", "const", "suspend", "inline", "crossinline", "noinline", "reified",
+            "annotation", "constructor", "by", "where",
+            "Long", "Byte", "Short", "Char", "Unit", "Any", "Nothing", "Pair", "Triple",
+            "MutableList", "MutableMap", "MutableSet", "HashMap", "ArrayList", "HashSet",
+            "Exception", "Throwable", "Sequence",
+        ].into_iter().collect()
+    });
+
+    // Swift-specific keywords and stdlib types
+    static SWIFT_KEYWORDS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
+        [
+            "guard", "let", "var", "func", "struct", "protocol", "extension", "where",
+            "override", "mutating", "throws", "rethrows", "async", "await", "some",
+            "weak", "unowned", "lazy", "static", "dynamic", "required", "convenience",
+            "Optional", "Void", "Data", "URL", "Date", "UUID", "Bool", "Character",
+            "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Int8", "Int16", "Int32", "Int64",
+            "CGFloat", "CGPoint", "CGSize", "CGRect", "NSObject", "AnyObject", "AnyHashable",
+            "Dictionary", "IndexPath", "DispatchQueue", "Codable", "Equatable", "Hashable",
+            "Comparable", "Identifiable", "Sendable", "Decodable", "Encodable",
+            "Any", "Never",
+        ].into_iter().collect()
+    });
+
+    let base_keywords = &*BASE_KEYWORDS;
+    let extra_keywords: &HashSet<&str> = match file_type {
+        Some(FileType::Swift) => &*SWIFT_KEYWORDS,
+        Some(FileType::Kotlin) | Some(FileType::Java) => &*KOTLIN_JAVA_KEYWORDS,
+        _ => &*KOTLIN_JAVA_KEYWORDS, // default for backward compat
+    };
+
+    let is_swift = matches!(file_type, Some(FileType::Swift));
 
     for (line_num, line) in content.lines().enumerate() {
         let line_num = line_num + 1;
@@ -667,7 +728,10 @@ pub fn extract_references(content: &str, defined_symbols: &[ParsedSymbol]) -> Re
         }
 
         // Skip import/package declarations
-        if trimmed.starts_with("import ") || trimmed.starts_with("package ") {
+        // Swift imports can have attribute prefixes: @testable, @_spi(...), @_exported, etc.
+        if trimmed.starts_with("import ") || trimmed.starts_with("package ")
+            || (is_swift && trimmed.starts_with('@') && trimmed.contains("import "))
+        {
             continue;
         }
 
@@ -679,7 +743,8 @@ pub fn extract_references(content: &str, defined_symbols: &[ParsedSymbol]) -> Re
         // Extract CamelCase types (classes, interfaces, etc.)
         for caps in identifier_re.captures_iter(line) {
             let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            if !name.is_empty() && !keywords.contains(name) && !defined_names.contains(name) {
+            if !name.is_empty() && !base_keywords.contains(name)
+                && !extra_keywords.contains(name) && !defined_names.contains(name) {
                 refs.push(ParsedRef {
                     name: name.to_string(),
                     line: line_num,
@@ -691,7 +756,8 @@ pub fn extract_references(content: &str, defined_symbols: &[ParsedSymbol]) -> Re
         // Extract function calls
         for caps in func_call_re.captures_iter(line) {
             let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            if !name.is_empty() && !keywords.contains(name) && !defined_names.contains(name) {
+            if !name.is_empty() && !base_keywords.contains(name)
+                && !extra_keywords.contains(name) && !defined_names.contains(name) {
                 // Only add if name length > 2 to avoid noise
                 if name.len() > 2 {
                     refs.push(ParsedRef {
@@ -1036,7 +1102,7 @@ mod tests {
         // Swift keywords that are not in the skip list should still be skipped
         let content = "guard let value = Optional else { return }\n";
         let symbols = vec![];
-        let refs = extract_references(content, &symbols).unwrap();
+        let refs = extract_references_for_lang(content, &symbols, Some(FileType::Swift)).unwrap();
         assert!(!refs.iter().any(|r| r.name == "Optional"),
             "Optional should be skipped as Swift stdlib type, got refs: {:?}", refs);
     }
@@ -1046,7 +1112,7 @@ mod tests {
         // Common Swift types that generate noise
         let content = "let url: URL = URL(string: path)!\nlet data: Data = Data()\nlet void: Void = ()\n";
         let symbols = vec![];
-        let refs = extract_references(content, &symbols).unwrap();
+        let refs = extract_references_for_lang(content, &symbols, Some(FileType::Swift)).unwrap();
         // These Swift stdlib types should be filtered out
         assert!(!refs.iter().any(|r| r.name == "Void"),
             "Void should be skipped as Swift stdlib type");
@@ -1057,7 +1123,7 @@ mod tests {
         // @testable import lines should be skipped like regular imports
         let content = "@testable import MyModule\n";
         let symbols = vec![];
-        let refs = extract_references(content, &symbols).unwrap();
+        let refs = extract_references_for_lang(content, &symbols, Some(FileType::Swift)).unwrap();
         assert!(!refs.iter().any(|r| r.name == "MyModule"),
             "@testable import should be skipped, got refs: {:?}", refs);
     }

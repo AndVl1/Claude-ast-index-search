@@ -20,10 +20,10 @@ pub static RUBY_PARSER: RubyParser = RubyParser;
 
 pub struct RubyParser;
 
-impl LanguageParser for RubyParser {
-    fn extract_refs(&self, content: &str, defined: &[ParsedSymbol]) -> Result<Vec<super::super::ParsedRef>> {
-        // Start with the default generic references
-        let mut refs = super::super::extract_references(content, defined)?;
+impl RubyParser {
+    fn ruby_extract_refs(&self, content: &str, defined: &[ParsedSymbol], file_type: Option<super::super::FileType>) -> Result<Vec<super::super::ParsedRef>> {
+        // Start with the language-aware generic references
+        let mut refs = super::super::extract_references_for_lang(content, defined, file_type)?;
 
         // Add Ruby-specific: bang methods (method!) and question methods (method?)
         // The generic extractor misses these because ! and ? are outside \w
@@ -55,6 +55,16 @@ impl LanguageParser for RubyParser {
         }
 
         Ok(refs)
+    }
+}
+
+impl LanguageParser for RubyParser {
+    fn extract_refs(&self, content: &str, defined: &[ParsedSymbol]) -> Result<Vec<super::super::ParsedRef>> {
+        self.ruby_extract_refs(content, defined, None)
+    }
+
+    fn extract_refs_for_lang(&self, content: &str, defined: &[ParsedSymbol], file_type: super::super::FileType) -> Result<Vec<super::super::ParsedRef>> {
+        self.ruby_extract_refs(content, defined, Some(file_type))
     }
 
     fn parse_symbols(&self, content: &str) -> Result<Vec<ParsedSymbol>> {

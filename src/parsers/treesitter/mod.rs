@@ -32,7 +32,7 @@ pub mod typescript;
 use anyhow::Result;
 use tree_sitter::{Language, Parser, Tree};
 
-use super::{ParsedSymbol, ParsedRef, extract_references, FileType};
+use super::{ParsedSymbol, ParsedRef, extract_references, extract_references_for_lang, FileType};
 
 /// Trait for tree-sitter based language parsers
 pub trait LanguageParser: Send + Sync {
@@ -43,6 +43,12 @@ pub trait LanguageParser: Send + Sync {
     /// Default implementation uses the existing regex-based generic logic.
     fn extract_refs(&self, content: &str, defined: &[ParsedSymbol]) -> Result<Vec<ParsedRef>> {
         extract_references(content, defined)
+    }
+
+    /// Extract references with language-specific keyword filtering.
+    /// Parsers that override extract_refs get their custom logic; others get language-aware filtering.
+    fn extract_refs_for_lang(&self, content: &str, defined: &[ParsedSymbol], file_type: FileType) -> Result<Vec<ParsedRef>> {
+        extract_references_for_lang(content, defined, Some(file_type))
     }
 }
 

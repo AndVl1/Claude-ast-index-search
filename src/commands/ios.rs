@@ -33,37 +33,42 @@ pub fn cmd_storyboard_usages(root: &Path, class_name: &str, module: Option<&str>
 
     let conn = db::open_db(root)?;
 
-    let query = if let Some(m) = module {
-        format!(
+    let class_like = format!("%{}%", class_name);
+
+    let results: Vec<(String, i64, String, Option<String>, Option<String>)> = if let Some(m) = module {
+        let mod_like = format!("%{}%", m);
+        let mut stmt = conn.prepare(
             r#"
             SELECT su.file_path, su.line, su.class_name, su.usage_type, su.storyboard_id
             FROM storyboard_usages su
             LEFT JOIN modules mod ON su.module_id = mod.id
-            WHERE su.class_name LIKE '%{}%'
-            AND (mod.name LIKE '%{}%' OR mod.path LIKE '%{}%')
+            WHERE su.class_name LIKE ?1
+            AND (mod.name LIKE ?2 OR mod.path LIKE ?2)
             ORDER BY su.file_path, su.line
             "#,
-            class_name, m, m
-        )
-    } else {
-        format!(
-            r#"
-            SELECT file_path, line, class_name, usage_type, storyboard_id
-            FROM storyboard_usages
-            WHERE class_name LIKE '%{}%'
-            ORDER BY file_path, line
-            "#,
-            class_name
-        )
-    };
-
-    let mut stmt = conn.prepare(&query)?;
-    let results: Vec<(String, i64, String, Option<String>, Option<String>)> = stmt
-        .query_map([], |row| {
+        )?;
+        let rows: Vec<_> = stmt.query_map(rusqlite::params![class_like, mod_like], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
         })?
         .filter_map(|r| r.ok())
         .collect();
+        rows
+    } else {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT file_path, line, class_name, usage_type, storyboard_id
+            FROM storyboard_usages
+            WHERE class_name LIKE ?1
+            ORDER BY file_path, line
+            "#,
+        )?;
+        let rows: Vec<_> = stmt.query_map(rusqlite::params![class_like], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+        rows
+    };
 
     if results.is_empty() {
         println!("{}", format!("No storyboard usages found for '{}'", class_name).yellow());
@@ -105,25 +110,40 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
         }
 
         let m = module.unwrap();
-        let type_filter = asset_type.map(|t| format!("AND a.type = '{}'", t)).unwrap_or_default();
+        let mod_like = format!("%{}%", m);
 
-        let query = format!(
-            r#"
-            SELECT a.name, a.type, a.file_path
-            FROM ios_assets a
-            LEFT JOIN modules mod ON a.module_id = mod.id
-            LEFT JOIN ios_asset_usages au ON a.id = au.asset_id
-            WHERE (mod.name LIKE '%{}%' OR mod.path LIKE '%{}%')
-            AND au.id IS NULL
-            {}
-            ORDER BY a.type, a.name
-            "#,
-            m, m, type_filter
-        );
+        let (query, params): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(t) = asset_type {
+            (
+                r#"
+                SELECT a.name, a.type, a.file_path
+                FROM ios_assets a
+                LEFT JOIN modules mod ON a.module_id = mod.id
+                LEFT JOIN ios_asset_usages au ON a.id = au.asset_id
+                WHERE (mod.name LIKE ?1 OR mod.path LIKE ?1)
+                AND au.id IS NULL
+                AND a.type = ?2
+                ORDER BY a.type, a.name
+                "#,
+                vec![Box::new(mod_like) as Box<dyn rusqlite::types::ToSql>, Box::new(t.to_string())],
+            )
+        } else {
+            (
+                r#"
+                SELECT a.name, a.type, a.file_path
+                FROM ios_assets a
+                LEFT JOIN modules mod ON a.module_id = mod.id
+                LEFT JOIN ios_asset_usages au ON a.id = au.asset_id
+                WHERE (mod.name LIKE ?1 OR mod.path LIKE ?1)
+                AND au.id IS NULL
+                ORDER BY a.type, a.name
+                "#,
+                vec![Box::new(mod_like) as Box<dyn rusqlite::types::ToSql>],
+            )
+        };
 
-        let mut stmt = conn.prepare(&query)?;
+        let mut stmt = conn.prepare(query)?;
         let results: Vec<(String, String, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -141,18 +161,23 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
         }
     } else if asset.is_empty() {
         // List all assets
-        let type_filter = asset_type.map(|t| format!("WHERE type = '{}'", t)).unwrap_or_default();
-        let query = format!(
-            "SELECT name, type, file_path FROM ios_assets {} ORDER BY type, name LIMIT 100",
-            type_filter
-        );
-
-        let mut stmt = conn.prepare(&query)?;
-        let results: Vec<(String, String, String)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
+        let results: Vec<(String, String, String)> = if let Some(t) = asset_type {
+            let mut stmt = conn.prepare(
+                "SELECT name, type, file_path FROM ios_assets WHERE type = ?1 ORDER BY type, name LIMIT 100",
+            )?;
+            stmt.query_map(rusqlite::params![t], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT name, type, file_path FROM ios_assets ORDER BY type, name LIMIT 100",
+            )?;
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
 
         println!("{}", format!("iOS assets ({}):", results.len()).bold());
         for (name, atype, path) in &results {
@@ -160,20 +185,18 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
         }
     } else {
         // Find usages of specific asset
-        let query = format!(
+        let asset_like = format!("%{}%", asset);
+        let mut stmt = conn.prepare(
             r#"
             SELECT a.name, a.type, au.usage_file, au.usage_line
             FROM ios_assets a
             JOIN ios_asset_usages au ON a.id = au.asset_id
-            WHERE a.name LIKE '%{}%'
+            WHERE a.name LIKE ?1
             ORDER BY au.usage_file, au.usage_line
             "#,
-            asset
-        );
-
-        let mut stmt = conn.prepare(&query)?;
+        )?;
         let results: Vec<(String, String, String, i64)> = stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+            .query_map(rusqlite::params![asset_like], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
@@ -195,39 +218,47 @@ pub fn cmd_asset_usages(root: &Path, asset: &str, module: Option<&str>, asset_ty
     Ok(())
 }
 
-/// Find SwiftUI state properties (@State, @Binding, @Published, etc.)
+/// Find SwiftUI state properties using tree-sitter.
+/// Finds any `@Wrapper var/let` property, not limited to a fixed list of wrappers.
 pub fn cmd_swiftui(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
+    use crate::parsers::treesitter::swift::find_property_wrappers;
+
     let start = Instant::now();
 
-    // Search for SwiftUI state properties: @State, @Binding, @Published, @ObservedObject, @StateObject, @EnvironmentObject
-    let pattern = r"@(State|Binding|Published|ObservedObject|StateObject|EnvironmentObject)\s+(private\s+)?(var|let)\s+\w+";
-
-    let prop_regex = Regex::new(r"@(State|Binding|Published|ObservedObject|StateObject|EnvironmentObject)\s+(?:private\s+)?(?:var|let)\s+(\w+)")?;
+    // Use grep to find candidate files (fast), then tree-sitter for precise extraction
+    let mut swift_files: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    search_files(root, r"@\w+.*\b(var|let)\b", &["swift"], |path, _line_num, _line| {
+        swift_files.insert(path.to_path_buf());
+    })?;
 
     let mut results: Vec<(String, String, String, usize)> = vec![];
 
-    search_files(root, pattern, &["swift"], |path, line_num, line| {
+    for file_path in &swift_files {
         if results.len() >= limit {
-            return;
+            break;
         }
+        if let Ok(content) = std::fs::read_to_string(file_path) {
+            if let Ok(wrappers) = find_property_wrappers(&content) {
+                for pw in wrappers {
+                    if results.len() >= limit {
+                        break;
+                    }
 
-        if let Some(caps) = prop_regex.captures(line) {
-            let prop_type = caps.get(1).unwrap().as_str().to_string();
-            let prop_name = caps.get(2).unwrap().as_str().to_string();
+                    if let Some(q) = query {
+                        let q_lower = q.to_lowercase();
+                        if !pw.name.to_lowercase().contains(&q_lower)
+                            && !pw.wrapper.to_lowercase().contains(&q_lower)
+                        {
+                            continue;
+                        }
+                    }
 
-            if let Some(q) = query {
-                let q_lower = q.to_lowercase();
-                if !prop_name.to_lowercase().contains(&q_lower)
-                    && !prop_type.to_lowercase().contains(&q_lower)
-                {
-                    return;
+                    let rel_path = relative_path(root, file_path);
+                    results.push((pw.wrapper, pw.name, rel_path, pw.line));
                 }
             }
-
-            let rel_path = relative_path(root, path);
-            results.push((prop_type, prop_name, rel_path, line_num));
         }
-    })?;
+    }
 
     println!(
         "{}",
@@ -257,35 +288,44 @@ pub fn cmd_swiftui(root: &Path, query: Option<&str>, limit: usize) -> Result<()>
     Ok(())
 }
 
-/// Find Swift async functions
+/// Find Swift async functions using tree-sitter.
+/// Handles multi-line signatures natively.
 pub fn cmd_async_funcs(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
+    use crate::parsers::treesitter::swift::find_async_funcs;
+
     let start = Instant::now();
-
-    // Search for async functions in Swift
-    let pattern = r"func\s+\w+[^{]*\basync\b";
-
-    let func_regex = Regex::new(r"func\s+(\w+)\s*(?:<[^>]*>)?\s*\([^)]*\)[^{]*\basync\b")?;
 
     let mut results: Vec<(String, String, usize)> = vec![];
 
-    search_files(root, pattern, &["swift"], |path, line_num, line| {
+    // Use grep to find candidate files (fast), then tree-sitter for precise extraction
+    let mut swift_files: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
+    search_files(root, r"\basync\b", &["swift"], |path, _line_num, _line| {
+        swift_files.insert(path.to_path_buf());
+    })?;
+
+    for file_path in &swift_files {
         if results.len() >= limit {
-            return;
+            break;
         }
+        if let Ok(content) = std::fs::read_to_string(file_path) {
+            if let Ok(funcs) = find_async_funcs(&content) {
+                for f in funcs {
+                    if results.len() >= limit {
+                        break;
+                    }
 
-        if let Some(caps) = func_regex.captures(line) {
-            let func_name = caps.get(1).unwrap().as_str().to_string();
+                    if let Some(q) = query {
+                        if !f.name.to_lowercase().contains(&q.to_lowercase()) {
+                            continue;
+                        }
+                    }
 
-            if let Some(q) = query {
-                if !func_name.to_lowercase().contains(&q.to_lowercase()) {
-                    return;
+                    let rel_path = relative_path(root, file_path);
+                    results.push((f.name, rel_path, f.line));
                 }
             }
-
-            let rel_path = relative_path(root, path);
-            results.push((func_name, rel_path, line_num));
         }
-    })?;
+    }
 
     println!(
         "{}",
