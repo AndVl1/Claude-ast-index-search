@@ -598,6 +598,25 @@ public func configure(
             "signature should include all parameters, got: {:?}", f.signature);
     }
 
+    #[test]
+    fn test_protocol_func_signature_no_body() {
+        let content = r#"
+protocol Service {
+    func fetchItems(
+        matching query: String,
+        limit: Int
+    ) async throws -> [Item]
+}
+"#;
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let f = symbols.iter().find(|s| s.name == "fetchItems").unwrap();
+        // Protocol functions have no body — signature should still capture all parameters
+        assert!(f.signature.contains("limit: Int"),
+            "protocol func signature should include all parameters, got: {:?}", f.signature);
+        assert!(f.signature.contains("async throws"),
+            "protocol func signature should include async throws, got: {:?}", f.signature);
+    }
+
     // === Issue #8: Extension conformances not captured ===
 
     #[test]

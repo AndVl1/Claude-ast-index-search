@@ -175,6 +175,121 @@ class NetworkService {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn test_storyboard_query_with_module_sql_injection() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    ast_index::db::init_db(&conn).unwrap();
+
+    // Insert a module and a storyboard usage linked to it
+    conn.execute(
+        "INSERT INTO modules (id, name, path, kind) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![1, "O'Malley", "Modules/O'Malley", "framework"],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO storyboard_usages (file_path, line, class_name, usage_type, module_id) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params!["Main.storyboard", 5, "O'BrienVC", "viewController", 1],
+    ).unwrap();
+
+    // Parameterized query matching the module branch of cmd_storyboard_usages
+    let class_like = format!("%{}%", "O'Brien");
+    let mod_like = format!("%{}%", "O'Malley");
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT su.file_path, su.line, su.class_name, su.usage_type, su.storyboard_id
+        FROM storyboard_usages su
+        LEFT JOIN modules mod ON su.module_id = mod.id
+        WHERE su.class_name LIKE ?1
+        AND (mod.name LIKE ?2 OR mod.path LIKE ?2)
+        ORDER BY su.file_path, su.line
+        "#,
+    ).expect("prepare should succeed with parameterized query");
+
+    let results: Vec<String> = stmt
+        .query_map(rusqlite::params![class_like, mod_like], |row| row.get(2))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    assert_eq!(results.len(), 1, "should find the row with single-quotes in both class and module");
+    assert_eq!(results[0], "O'BrienVC");
+}
+
+#[test]
+fn test_asset_unused_query_sql_injection() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    ast_index::db::init_db(&conn).unwrap();
+
+    conn.execute(
+        "INSERT INTO modules (id, name, path, kind) VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![1, "App's Core", "Modules/App's Core", "framework"],
+    ).unwrap();
+    conn.execute(
+        "INSERT INTO ios_assets (id, module_id, type, name, file_path) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![1, 1, "imageset", "icon_o'reilly", "Assets.xcassets/icon.imageset"],
+    ).unwrap();
+    // No usage row → asset is unused
+
+    // Parameterized query matching the unused-assets branch of cmd_asset_usages
+    let mod_like = format!("%{}%", "App's Core");
+    let query_no_type = r#"
+        SELECT a.name, a.type, a.file_path
+        FROM ios_assets a
+        LEFT JOIN modules mod ON a.module_id = mod.id
+        LEFT JOIN ios_asset_usages au ON a.id = au.asset_id
+        WHERE (mod.name LIKE ?1 OR mod.path LIKE ?1)
+        AND au.id IS NULL
+        ORDER BY a.type, a.name
+    "#;
+    let mut stmt = conn.prepare(query_no_type).expect("prepare without type filter should succeed");
+    let results: Vec<String> = stmt
+        .query_map(rusqlite::params![mod_like], |row| row.get(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    assert_eq!(results, vec!["icon_o'reilly"]);
+
+    // With type filter
+    let query_with_type = r#"
+        SELECT a.name, a.type, a.file_path
+        FROM ios_assets a
+        LEFT JOIN modules mod ON a.module_id = mod.id
+        LEFT JOIN ios_asset_usages au ON a.id = au.asset_id
+        WHERE (mod.name LIKE ?1 OR mod.path LIKE ?1)
+        AND au.id IS NULL
+        AND a.type = ?2
+        ORDER BY a.type, a.name
+    "#;
+    let mut stmt = conn.prepare(query_with_type).expect("prepare with type filter should succeed");
+    let results: Vec<String> = stmt
+        .query_map(rusqlite::params![mod_like, "imageset"], |row| row.get(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    assert_eq!(results, vec!["icon_o'reilly"]);
+}
+
+#[test]
+fn test_asset_list_query_sql_injection() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    ast_index::db::init_db(&conn).unwrap();
+
+    conn.execute(
+        "INSERT INTO ios_assets (type, name, file_path) VALUES (?1, ?2, ?3)",
+        rusqlite::params!["image'set", "icon_test", "Assets.xcassets/icon.imageset"],
+    ).unwrap();
+
+    // Parameterized query matching the list-all-assets branch with type filter
+    let mut stmt = conn.prepare(
+        "SELECT name, type, file_path FROM ios_assets WHERE type = ?1 ORDER BY type, name LIMIT 100",
+    ).expect("prepare with type param should succeed");
+    let results: Vec<String> = stmt
+        .query_map(rusqlite::params!["image'set"], |row| row.get(0))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+    assert_eq!(results, vec!["icon_test"]);
+}
+
+#[test]
 fn test_storyboard_query_sql_injection() {
     // A class name containing a single quote should not break the query.
     let result = try_storyboard_query("O'Brien");
