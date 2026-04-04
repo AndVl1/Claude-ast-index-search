@@ -64,23 +64,6 @@ The index is stored at `~/Library/Caches/ast-index/<project-hash>/index.db` (mac
 
 Project type is auto-detected by marker files (build.gradle.kts, Package.swift, Makefile.PL, etc.). Python, Go, Proto, WSDL, and C++ files are indexed alongside main project type.
 
-## JSON Output
-
-Most commands support `--format json` for structured output:
-
-```bash
-ast-index search "Query" --format json
-ast-index symbol "Name" --format json
-ast-index class "Name" --format json
-ast-index usages "Symbol" --format json
-ast-index implementations "Parent" --format json
-ast-index refs "Symbol" --format json
-ast-index stats --format json
-ast-index unused-symbols --format json
-ast-index map --format json
-ast-index conventions --format json
-```
-
 ## Core Commands
 
 ### Universal Search
@@ -612,6 +595,21 @@ Consult: `references/module-commands.md`
 7. Use `ast-index implementations` to understand inheritance
 8. Use `ast-index changed --base main` before code review
 9. Run `ast-index update` periodically to keep index fresh
+
+## JSON Output (Optional)
+
+**Default output is human-readable plain text** — use it unless you specifically need structured data for scripting.
+
+Add `--format json` only when:
+- Parsing output programmatically (pipelines, scripts)
+- Need exact field values (file paths, line numbers, symbol kinds)
+- Integrating with another tool
+
+Supported commands: `search`, `symbol`, `class`, `usages`, `implementations`, `refs`, `stats`, `unused-symbols`, `map`, `conventions`.
+
+```bash
+ast-index search "Query" --format json | jq '.results[].path'
+```
 
 ## Additional Resources
 
