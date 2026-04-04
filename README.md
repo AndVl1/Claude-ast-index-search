@@ -1,4 +1,4 @@
-# ast-index v3.33.2
+# ast-index v3.34.0
 
 Fast code search CLI for 30 programming languages. Native Rust implementation.
 
@@ -423,6 +423,18 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.34.0
+- **Swift improvements** (contributed by @kolyuchiy):
+  - Tree-sitter based detection of SwiftUI property wrappers (`@Environment`, `@AppStorage`, `@Bindable`, `@Observable`) — replaces regex approach
+  - Tree-sitter based async function detection with multi-line signatures
+  - Language-aware reference extraction — separate keyword sets for Swift/Kotlin/Java, less noise
+  - Correct inheritance semantics: struct/enum/actor/protocol parents marked as `implements`, not `extends`
+  - Extension conformances now tracked
+  - `.h` file content sniffing — auto-route to ObjC parser when ObjC markers found
+- **SQL injection fix in iOS commands** — parameterized queries in `storyboard-usages`, `asset-usages`, `asset-unused` (contributed by @kolyuchiy)
+- **Scoped implementations fix** — `find_implementations_scoped` uses SQL filtering instead of post-query in-memory filter, no more result loss (contributed by @vadimvolk)
+- Ruby parser: language-aware reference extraction via `extract_refs_for_lang`
 
 ### 3.33.2
 - **Java record support** — `record` declarations indexed as classes with inheritance, record components as properties + synthetic accessor methods, dedup when accessor is explicitly overridden (contributed by @viktoraseev)
