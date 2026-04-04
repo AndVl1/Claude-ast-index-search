@@ -864,6 +864,62 @@ pub fn find_implementations(
     Ok(results)
 }
 
+pub fn find_implementations_scoped(
+    conn: &Connection,
+    parent_name: &str,
+    limit: usize,
+    scope: &SearchScope,
+) -> Result<Vec<SearchResult>> {
+    if scope.is_empty() {
+        return find_implementations(conn, parent_name, limit);
+    }
+
+    let suffix_pattern = format!("%.{}", parent_name);
+    let (scope_clause, scope_params) = scope.path_condition();
+
+    let sql = format!(
+        r#"
+        SELECT s.name, s.kind, s.line, s.signature, f.path
+        FROM inheritance i
+        JOIN symbols s ON i.child_id = s.id
+        JOIN files f ON s.file_id = f.id
+        WHERE (i.parent_name = ?1 OR i.parent_name LIKE ?2){}
+        ORDER BY
+            CASE
+                WHEN i.parent_name = ?1 THEN 0
+                ELSE 1
+            END, s.name
+        LIMIT ?{}
+        "#,
+        scope_clause,
+        3 + scope_params.len()
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    all_params.push(Box::new(parent_name.to_string()));
+    all_params.push(Box::new(suffix_pattern));
+    for p in &scope_params {
+        all_params.push(Box::new(p.clone()));
+    }
+    all_params.push(Box::new(limit as i64));
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = all_params.iter().map(|p| p.as_ref()).collect();
+    let results = stmt
+        .query_map(param_refs.as_slice(), |row| {
+            Ok(SearchResult {
+                name: row.get(0)?,
+                kind: row.get(1)?,
+                line: row.get(2)?,
+                signature: row.get(3)?,
+                path: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(results)
+}
+
 /// Get database statistics
 pub fn get_stats(conn: &Connection) -> Result<DbStats> {
     let file_count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
