@@ -261,6 +261,10 @@ pub fn init_db(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_refs_name ON refs(name);
         CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
+        -- Composite covering index for find_references: lets SQLite avoid
+        -- full table scan when filtering by name AND joining with files
+        -- on large ref tables (millions of rows). See issue #19.
+        CREATE INDEX IF NOT EXISTS idx_refs_name_file_line ON refs(name, file_id, line);
 
         -- XML usages (classes used in XML layouts)
         CREATE TABLE IF NOT EXISTS xml_usages (
@@ -992,14 +996,25 @@ pub fn find_references(
     name: &str,
     limit: usize,
 ) -> Result<Vec<RefResult>> {
+    // Early materialization: filter and sort refs using covering index BEFORE
+    // joining with files. Avoids SQLite planner choosing full scan on large
+    // tables (~12M rows) when ORDER BY references the joined table. See #19.
+    //
+    // Inner ORDER BY (file_id, line) is free because idx_refs_name_file_line
+    // has exactly this sort order. Outer ORDER BY f.path reshuffles the tiny
+    // result set (bounded by LIMIT) so output is stable for users.
     let mut stmt = conn.prepare(
         r#"
         SELECT r.name, r.line, r.context, f.path
-        FROM refs r
-        JOIN files f ON r.file_id = f.id
-        WHERE r.name = ?1
+        FROM (
+            SELECT name, file_id, line, context
+            FROM refs
+            WHERE name = ?1
+            ORDER BY file_id, line
+            LIMIT ?2
+        ) r
+        JOIN files f ON f.id = r.file_id
         ORDER BY f.path, r.line
-        LIMIT ?2
         "#,
     )?;
 
@@ -1345,16 +1360,34 @@ pub fn find_references_scoped(
 
     let (scope_clause, scope_params) = scope.path_condition();
 
+    // Early materialization with scope pushed into the subquery via IN clause.
+    // Avoids materializing millions of refs when scope narrows by path. See #19.
+    //
+    // Scope filter is applied at files table (small, ~tens of thousands),
+    // producing a small file_id set, then refs are filtered by both name
+    // AND file_id — both covered by idx_refs_name_file_line.
+    let scope_subquery = if scope_params.is_empty() {
+        String::new()
+    } else {
+        // Strip leading " AND " and wrap in file_id IN subselect
+        let bare_conditions = scope_clause.trim_start_matches(" AND ");
+        format!(" AND file_id IN (SELECT id FROM files f WHERE {})", bare_conditions)
+    };
+
     let sql = format!(
         r#"
         SELECT r.name, r.line, r.context, f.path
-        FROM refs r
-        JOIN files f ON r.file_id = f.id
-        WHERE r.name = ?1{}
+        FROM (
+            SELECT name, file_id, line, context
+            FROM refs
+            WHERE name = ?1{}
+            ORDER BY file_id, line
+            LIMIT ?{}
+        ) r
+        JOIN files f ON f.id = r.file_id
         ORDER BY f.path, r.line
-        LIMIT ?{}
         "#,
-        scope_clause,
+        scope_subquery,
         2 + scope_params.len()
     );
 

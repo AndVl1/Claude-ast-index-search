@@ -30,6 +30,150 @@ pub static BSL_PARSER: BslParser = BslParser;
 
 pub struct BslParser;
 
+/// Extract 1C module name from BSL file path.
+///
+/// In 1C:Enterprise configurations, module names are encoded in the directory structure
+/// (NOT in the file content). This function parses the path to derive a qualified module
+/// name matching 1C metadata conventions.
+///
+/// Path patterns:
+/// - `CommonModules/Name/Ext/Module.bsl`     → `Name` (common module)
+/// - `Documents/Name/Ext/ObjectModule.bsl`   → `Документ.Name`
+/// - `Documents/Name/Ext/ManagerModule.bsl`  → `Документ.Name.МенеджерОбъекта`
+/// - `Documents/Name/Forms/F/Ext/Form/Module.bsl` → `Документ.Name.Форма.F`
+/// - `Catalogs/Name/Ext/ObjectModule.bsl`    → `Справочник.Name`
+/// - `Enums/Name/...`                         → `Перечисление.Name`
+/// - `InformationRegisters/Name/...`          → `РегистрСведений.Name`
+/// - `AccumulationRegisters/Name/...`         → `РегистрНакопления.Name`
+/// - `Reports/Name/...`                       → `Отчет.Name`
+/// - `DataProcessors/Name/...`                → `Обработка.Name`
+/// - `ChartsOfAccounts/Name/...`              → `ПланСчетов.Name`
+/// - `Constants/Name/...`                     → `Константа.Name`
+/// - `ExchangePlans/Name/...`                 → `ПланОбмена.Name`
+/// - `BusinessProcesses/Name/...`             → `БизнесПроцесс.Name`
+/// - `Tasks/Name/...`                         → `Задача.Name`
+pub fn extract_bsl_module_name(path: &str) -> Option<String> {
+    // Normalize path separators
+    let normalized = path.replace('\\', "/");
+    let parts: Vec<&str> = normalized.split('/').collect();
+
+    // Find the metadata collection prefix (e.g., "CommonModules", "Documents")
+    // Skip leading directories like "src", "configuration", etc.
+    let (collection_idx, collection) = parts.iter().enumerate().find_map(|(i, &p)| {
+        match p {
+            "CommonModules" | "Documents" | "Catalogs" | "Enums"
+            | "InformationRegisters" | "AccumulationRegisters" | "AccountingRegisters"
+            | "CalculationRegisters" | "Reports" | "DataProcessors" | "ChartsOfAccounts"
+            | "ChartsOfCharacteristicTypes" | "ChartsOfCalculationTypes"
+            | "Constants" | "ExchangePlans" | "BusinessProcesses" | "Tasks"
+            | "DocumentJournals" | "Subsystems" | "CommonForms" | "SettingsStorages"
+            | "WebServices" | "HTTPServices" | "CommonCommands" | "CommandGroups"
+            | "FilterCriteria" | "EventSubscriptions" | "ScheduledJobs"
+            | "FunctionalOptions" | "FunctionalOptionsParameters" | "DefinedTypes"
+            | "Sequences" | "DocumentNumerators" | "Roles" | "ExternalDataSources" => Some((i, p)),
+            _ => None,
+        }
+    })?;
+
+    // The name comes right after the collection
+    let name = parts.get(collection_idx + 1)?;
+    if name.is_empty() {
+        return None;
+    }
+
+    // Map collection to Russian prefix (matching 1C conventions)
+    let prefix = match collection {
+        "CommonModules" => return Some(name.to_string()), // common modules have no prefix
+        "Documents" => "Документ",
+        "Catalogs" => "Справочник",
+        "Enums" => "Перечисление",
+        "InformationRegisters" => "РегистрСведений",
+        "AccumulationRegisters" => "РегистрНакопления",
+        "AccountingRegisters" => "РегистрБухгалтерии",
+        "CalculationRegisters" => "РегистрРасчета",
+        "Reports" => "Отчет",
+        "DataProcessors" => "Обработка",
+        "ChartsOfAccounts" => "ПланСчетов",
+        "ChartsOfCharacteristicTypes" => "ПланВидовХарактеристик",
+        "ChartsOfCalculationTypes" => "ПланВидовРасчета",
+        "Constants" => "Константа",
+        "ExchangePlans" => "ПланОбмена",
+        "BusinessProcesses" => "БизнесПроцесс",
+        "Tasks" => "Задача",
+        "DocumentJournals" => "ЖурналДокументов",
+        "Subsystems" => "Подсистема",
+        "CommonForms" => "ОбщаяФорма",
+        "SettingsStorages" => "ХранилищеНастроек",
+        "WebServices" => "WebСервис",
+        "HTTPServices" => "HTTPСервис",
+        "CommonCommands" => "ОбщаяКоманда",
+        "CommandGroups" => "ГруппаКоманд",
+        "FilterCriteria" => "КритерийОтбора",
+        "EventSubscriptions" => "ПодпискаНаСобытие",
+        "ScheduledJobs" => "РегламентноеЗадание",
+        "FunctionalOptions" => "ФункциональнаяОпция",
+        "FunctionalOptionsParameters" => "ПараметрФункциональнойОпции",
+        "DefinedTypes" => "ОпределяемыйТип",
+        "Sequences" => "Последовательность",
+        "DocumentNumerators" => "Нумератор",
+        "Roles" => "Роль",
+        "ExternalDataSources" => "ВнешнийИсточникДанных",
+        _ => return None,
+    };
+
+    // Optionally append the module kind (ObjectModule, ManagerModule, Form, etc.)
+    let suffix = derive_module_suffix(&parts, collection_idx + 2);
+    if suffix.is_empty() {
+        Some(format!("{}.{}", prefix, name))
+    } else {
+        Some(format!("{}.{}.{}", prefix, name, suffix))
+    }
+}
+
+/// Derive the module-kind suffix for qualified names (e.g., МенеджерОбъекта, Форма.FormName).
+fn derive_module_suffix(parts: &[&str], start: usize) -> String {
+    // Typical layouts:
+    //   Documents/Name/Ext/ObjectModule.bsl       → ""  (base is the object itself)
+    //   Documents/Name/Ext/ManagerModule.bsl      → "МенеджерОбъекта"
+    //   Documents/Name/Forms/FName/Ext/Form/Module.bsl → "Форма.FName"
+    //   Documents/Name/Commands/CName/...         → "Команда.CName"
+    if parts.len() <= start {
+        return String::new();
+    }
+
+    // Check for Forms/Commands/Templates nested under the object
+    for (i, &p) in parts[start..].iter().enumerate() {
+        match p {
+            "Forms" => {
+                if let Some(form_name) = parts.get(start + i + 1) {
+                    return format!("Форма.{}", form_name);
+                }
+            }
+            "Commands" => {
+                if let Some(cmd_name) = parts.get(start + i + 1) {
+                    return format!("Команда.{}", cmd_name);
+                }
+            }
+            "Templates" => {
+                if let Some(tpl_name) = parts.get(start + i + 1) {
+                    return format!("Макет.{}", tpl_name);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Check filename for module-kind suffix
+    let file_name = parts.last().copied().unwrap_or("");
+    match file_name {
+        "ManagerModule.bsl" => "МенеджерОбъекта".to_string(),
+        "RecordSetModule.bsl" => "НаборЗаписей".to_string(),
+        "ValueManagerModule.bsl" => "МенеджерЗначения".to_string(),
+        "CommandModule.bsl" => "МодульКоманды".to_string(),
+        _ => String::new(),
+    }
+}
+
 /// Extract annotation text from a declaration node's preceding sibling or child
 fn extract_annotation(content: &str, decl_node: &tree_sitter::Node) -> Option<(String, usize)> {
     // Look for annotation child within the declaration
@@ -319,6 +463,86 @@ fn find_capture<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_extract_bsl_module_name_common_module() {
+        assert_eq!(
+            extract_bsl_module_name("CommonModules/ГосударственныеКонтракты/Ext/Module.bsl"),
+            Some("ГосударственныеКонтракты".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_document_object() {
+        assert_eq!(
+            extract_bsl_module_name("Documents/РегистрацияОбязательств/Ext/ObjectModule.bsl"),
+            Some("Документ.РегистрацияОбязательств".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_document_manager() {
+        assert_eq!(
+            extract_bsl_module_name("Documents/Заказ/Ext/ManagerModule.bsl"),
+            Some("Документ.Заказ.МенеджерОбъекта".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_catalog() {
+        assert_eq!(
+            extract_bsl_module_name("Catalogs/Товары/Ext/ObjectModule.bsl"),
+            Some("Справочник.Товары".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_form() {
+        assert_eq!(
+            extract_bsl_module_name("Documents/Заказ/Forms/ФормаДокумента/Ext/Form/Module.bsl"),
+            Some("Документ.Заказ.Форма.ФормаДокумента".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_info_register() {
+        assert_eq!(
+            extract_bsl_module_name("InformationRegisters/ЦеныНоменклатуры/Ext/RecordSetModule.bsl"),
+            Some("РегистрСведений.ЦеныНоменклатуры.НаборЗаписей".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_nested_src() {
+        // Prefixed with configuration/src folder — should still work
+        assert_eq!(
+            extract_bsl_module_name("src/cf/CommonModules/УтилитыСистемы/Ext/Module.bsl"),
+            Some("УтилитыСистемы".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_backslash() {
+        // Windows-style paths
+        assert_eq!(
+            extract_bsl_module_name("CommonModules\\Утилиты\\Ext\\Module.bsl"),
+            Some("Утилиты".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_unknown() {
+        // Non-1C BSL file → None
+        assert_eq!(extract_bsl_module_name("scripts/helper.bsl"), None);
+    }
+
+    #[test]
+    fn test_extract_bsl_module_name_enum() {
+        assert_eq!(
+            extract_bsl_module_name("Enums/СтатусыЗаказов/Ext/ManagerModule.bsl"),
+            Some("Перечисление.СтатусыЗаказов.МенеджерОбъекта".to_string())
+        );
+    }
 
     #[test]
     fn test_parse_procedure_ru() {

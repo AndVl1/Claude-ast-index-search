@@ -478,7 +478,21 @@ fn parse_file(root: &Path, file_path: &Path) -> Result<ParsedFile> {
         }
     };
 
-    let (symbols, refs) = parsers::parse_file_symbols(&content, file_type)?;
+    let (mut symbols, refs) = parsers::parse_file_symbols(&content, file_type)?;
+
+    // BSL (1C:Enterprise) — module names are encoded in directory structure,
+    // not in file content. Extract module name from path and emit synthetic symbol.
+    if file_type == parsers::FileType::Bsl {
+        if let Some(module_name) = parsers::treesitter::bsl::extract_bsl_module_name(&rel_path) {
+            symbols.push(parsers::ParsedSymbol {
+                name: module_name,
+                kind: crate::db::SymbolKind::Package,
+                line: 1,
+                signature: format!("module {}", rel_path),
+                parents: vec![],
+            });
+        }
+    }
 
     Ok(ParsedFile {
         rel_path,

@@ -246,6 +246,8 @@ pub fn cmd_outline(root: &Path, file: &str) -> Result<()> {
         found = outline_via_treesitter(&content, ft, &[SymbolKind::Import])?;
     } else if ext == "mm" {
         found = outline_via_treesitter(&content, crate::parsers::FileType::ObjC, &[SymbolKind::Import])?;
+    } else if ext == "bsl" || ext == "os" {
+        found = outline_via_treesitter(&content, crate::parsers::FileType::Bsl, &[])?;
     } else {
         // Kotlin (default fallback — existing regex logic)
         let class_re = Regex::new(r"(?m)^\s*((?:public|private|protected|internal|abstract|open|final|sealed|data)?\s*)(class|interface|object|enum\s+class)\s+(\w+)")?;

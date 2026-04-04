@@ -1,4 +1,4 @@
-# ast-index v3.34.0
+# ast-index v3.35.0
 
 Fast code search CLI for 30 programming languages. Native Rust implementation.
 
@@ -423,6 +423,12 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.35.0
+- **BSL fixes** (issue #19 by @colegero):
+  - **Module indexing** — 1C modules now extracted from directory paths (`CommonModules/X/` → `X`, `Documents/Y/` → `Документ.Y`, etc.), fixes `Modules: 0` on 1C configurations. Supports 35+ 1C metadata collections.
+  - **`outline` for BSL files** — routes `.bsl`/`.os` to tree-sitter parser (was falling back to Kotlin regex → no symbols found)
+  - **Query planner optimization** — added composite index `idx_refs_name_file_line` + early materialization in `find_references` via subquery. On large BSL databases (12M+ refs) `usages`/`callers` went from 30s timeout to <10ms (benchmarked ~76x faster on 28k refs)
 
 ### 3.34.0
 - **Swift improvements** (contributed by @kolyuchiy):
