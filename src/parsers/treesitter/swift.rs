@@ -1,12 +1,12 @@
 //! Tree-sitter based Swift parser
 
 use anyhow::Result;
-use tree_sitter::{Language, Query, QueryCursor, StreamingIterator};
 use std::sync::LazyLock;
+use tree_sitter::{Language, Query, QueryCursor, StreamingIterator};
 
+use super::{line_text, node_line, node_text, parse_tree, LanguageParser};
 use crate::db::SymbolKind;
 use crate::parsers::ParsedSymbol;
-use super::{LanguageParser, parse_tree, node_text, node_line, line_text};
 
 static SWIFT_LANGUAGE: LazyLock<Language> = LazyLock::new(|| tree_sitter_swift::LANGUAGE.into());
 
@@ -29,7 +29,10 @@ impl LanguageParser for SwiftParser {
         // Build capture name -> index map
         let capture_names = query.capture_names();
         let idx = |name: &str| -> Option<u32> {
-            capture_names.iter().position(|n| *n == name).map(|i| i as u32)
+            capture_names
+                .iter()
+                .position(|n| *n == name)
+                .map(|i| i as u32)
         };
 
         let idx_decl_kind = idx("decl_kind");
@@ -51,20 +54,17 @@ impl LanguageParser for SwiftParser {
                 let line = node_line(&name_cap.node);
 
                 // Determine kind from declaration_kind
-                let kind = if let Some(dk_cap) = find_capture(m, idx_decl_kind) {
-                    let dk = node_text(content, &dk_cap.node);
-                    match dk {
-                        "class" | "actor" => SymbolKind::Class,
-                        "struct" => SymbolKind::Class,
-                        _ => SymbolKind::Class,
-                    }
-                } else {
-                    SymbolKind::Class
-                };
+                let decl_kind_str = find_capture(m, idx_decl_kind)
+                    .map(|dk_cap| node_text(content, &dk_cap.node))
+                    .unwrap_or("class");
+                let kind = SymbolKind::Class;
+
+                // Structs and actors can't have superclasses — all parents are protocol conformances
+                let all_implements = matches!(decl_kind_str, "struct" | "actor");
 
                 // Walk the class_declaration node for inheritance_specifier children
                 let parents = if let Some(decl_node) = name_cap.node.parent() {
-                    collect_parents_from_node(&decl_node, content)
+                    collect_parents_from_node(&decl_node, content, all_implements)
                 } else {
                     vec![]
                 };
@@ -83,8 +83,9 @@ impl LanguageParser for SwiftParser {
             if let Some(name_cap) = find_capture(m, idx_enum_name) {
                 let name = node_text(content, &name_cap.node);
                 let line = node_line(&name_cap.node);
+                // Enums can't have superclasses — all parents are protocol conformances / raw values
                 let parents = if let Some(decl_node) = name_cap.node.parent() {
-                    collect_parents_from_node(&decl_node, content)
+                    collect_parents_from_node(&decl_node, content, true)
                 } else {
                     vec![]
                 };
@@ -107,12 +108,19 @@ impl LanguageParser for SwiftParser {
                 let extended_name = format!("{}+Extension", base_name);
                 let line = node_line(&ext_cap.node);
 
+                // Collect conformances from extension declaration
+                let mut parents = vec![(base_name.to_string(), "extends".to_string())];
+                if let Some(decl_node) = ext_cap.node.parent() {
+                    let conformances = collect_parents_from_node(&decl_node, content, true);
+                    parents.extend(conformances);
+                }
+
                 symbols.push(ParsedSymbol {
                     name: extended_name,
                     kind: SymbolKind::Object,
                     line,
                     signature: line_text(content, line).trim().to_string(),
-                    parents: vec![(base_name.to_string(), "extends".to_string())],
+                    parents,
                 });
                 continue;
             }
@@ -121,8 +129,9 @@ impl LanguageParser for SwiftParser {
             if let Some(name_cap) = find_capture(m, idx_protocol_name) {
                 let name = node_text(content, &name_cap.node);
                 let line = node_line(&name_cap.node);
+                // Protocol parents are all protocol conformances
                 let parents = if let Some(decl_node) = name_cap.node.parent() {
-                    collect_parents_from_node(&decl_node, content)
+                    collect_parents_from_node(&decl_node, content, true)
                 } else {
                     vec![]
                 };
@@ -141,11 +150,17 @@ impl LanguageParser for SwiftParser {
             if let Some(cap) = find_capture(m, idx_func_name) {
                 let name = node_text(content, &cap.node);
                 let line = node_line(&cap.node);
+                // Extract multi-line signature from the function_declaration node
+                let signature = if let Some(func_node) = cap.node.parent() {
+                    extract_func_signature(content, &func_node)
+                } else {
+                    line_text(content, line).trim().to_string()
+                };
                 symbols.push(ParsedSymbol {
                     name: name.to_string(),
                     kind: SymbolKind::Function,
                     line,
-                    signature: line_text(content, line).trim().to_string(),
+                    signature,
                     parents: vec![],
                 });
                 continue;
@@ -198,20 +213,63 @@ impl LanguageParser for SwiftParser {
 }
 
 /// Collect parent types by walking a declaration node's inheritance_specifier children.
-/// First parent is "extends", the rest are "implements".
-fn collect_parents_from_node(node: &tree_sitter::Node, content: &str) -> Vec<(String, String)> {
+/// If `all_implements` is true (structs, enums, actors, protocols), all parents are "implements".
+/// Otherwise (classes), the first parent is "extends" and the rest are "implements".
+fn collect_parents_from_node(
+    node: &tree_sitter::Node,
+    content: &str,
+    all_implements: bool,
+) -> Vec<(String, String)> {
     let mut parents = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "inheritance_specifier" {
             // Find the type_identifier inside user_type
             if let Some(type_name) = find_type_identifier_in(&child, content) {
-                let kind = if parents.is_empty() { "extends" } else { "implements" };
+                let kind = if all_implements || !parents.is_empty() {
+                    "implements"
+                } else {
+                    "extends"
+                };
                 parents.push((type_name, kind.to_string()));
             }
         }
     }
     parents
+}
+
+/// Extract a function signature from the function_declaration node,
+/// spanning multiple lines up to (but not including) the body `{`.
+fn extract_func_signature(content: &str, func_node: &tree_sitter::Node) -> String {
+    let start = func_node.start_position();
+    let end = func_node.end_position();
+    let lines: Vec<&str> = content.lines().collect();
+
+    let mut sig_parts = Vec::new();
+    for line in &lines[start.row..=end.row.min(lines.len().saturating_sub(1))] {
+        let line = line.trim();
+        // Stop at the body opening brace
+        if let Some(brace_pos) = line.find('{') {
+            let before = line[..brace_pos].trim();
+            if !before.is_empty() {
+                sig_parts.push(before);
+            }
+            break;
+        }
+        if !line.is_empty() {
+            sig_parts.push(line);
+        }
+    }
+
+    let sig = sig_parts.join(" ");
+    if sig.is_empty() {
+        lines
+            .get(start.row)
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default()
+    } else {
+        sig
+    }
 }
 
 /// Find the first type_identifier in a node's descendants
@@ -241,6 +299,130 @@ fn find_capture<'a>(
     m.captures.iter().find(|c| c.index == idx)
 }
 
+/// A SwiftUI property wrapper found by tree-sitter.
+#[derive(Debug)]
+pub struct SwiftPropertyWrapper {
+    /// The wrapper name, e.g. "State", "Environment", "AppStorage"
+    pub wrapper: String,
+    /// The property name
+    pub name: String,
+    /// 1-based line number
+    pub line: usize,
+    /// Full line text (trimmed)
+    pub text: String,
+}
+
+/// Find all properties with `@`-attribute wrappers in Swift source using tree-sitter.
+/// This replaces the regex-based approach and automatically handles any property wrapper
+/// (including `@Environment(\.dismiss)`, `@AppStorage("key")`, `@Bindable`, etc.).
+pub fn find_property_wrappers(content: &str) -> Result<Vec<SwiftPropertyWrapper>> {
+    let tree = parse_tree(content, &SWIFT_LANGUAGE)?;
+    let mut results = Vec::new();
+
+    // Walk all property_declaration nodes
+    walk_for_kind(&tree.root_node(), "property_declaration", &mut |node| {
+        // Look for modifiers > attribute > user_type > type_identifier
+        let mut wrapper_name = None;
+        let mut prop_name = None;
+        let mut cursor = node.walk();
+
+        for child in node.children(&mut cursor) {
+            if child.kind() == "modifiers" {
+                let mut mc = child.walk();
+                for mod_child in child.children(&mut mc) {
+                    if mod_child.kind() == "attribute" {
+                        // Find the type_identifier inside the attribute
+                        if let Some(name) = find_type_identifier_in(&mod_child, content) {
+                            wrapper_name = Some(name);
+                        }
+                    }
+                }
+            }
+            if child.kind() == "pattern" {
+                if let Some(id) = child.child(0) {
+                    if id.kind() == "simple_identifier" {
+                        prop_name = Some(node_text(content, &id).to_string());
+                    }
+                }
+            }
+        }
+
+        if let (Some(wrapper), Some(name)) = (wrapper_name, prop_name) {
+            let line = node_line(node);
+            results.push(SwiftPropertyWrapper {
+                wrapper,
+                name,
+                line,
+                text: line_text(content, line).trim().to_string(),
+            });
+        }
+    });
+
+    Ok(results)
+}
+
+/// An async Swift function found by tree-sitter.
+#[derive(Debug)]
+pub struct SwiftAsyncFunc {
+    /// Function name
+    pub name: String,
+    /// 1-based line number
+    pub line: usize,
+    /// Full signature text
+    pub signature: String,
+}
+
+/// Find all async functions in Swift source using tree-sitter.
+/// Handles multi-line signatures natively since tree-sitter parses the full AST.
+pub fn find_async_funcs(content: &str) -> Result<Vec<SwiftAsyncFunc>> {
+    let tree = parse_tree(content, &SWIFT_LANGUAGE)?;
+    let mut results = Vec::new();
+
+    walk_for_kind(&tree.root_node(), "function_declaration", &mut |node| {
+        // Check if the function has an `async` child node
+        let mut has_async = false;
+        let mut func_name = None;
+        let mut cursor = node.walk();
+
+        for child in node.children(&mut cursor) {
+            if child.kind() == "async" {
+                has_async = true;
+            }
+            if child.kind() == "simple_identifier" {
+                func_name = Some(node_text(content, &child).to_string());
+            }
+        }
+
+        if has_async {
+            if let Some(name) = func_name {
+                let line = node_line(node);
+                results.push(SwiftAsyncFunc {
+                    name,
+                    line,
+                    signature: extract_func_signature(content, node),
+                });
+            }
+        }
+    });
+
+    Ok(results)
+}
+
+/// Walk tree recursively, calling `callback` for every node matching `kind`.
+fn walk_for_kind<'a>(
+    node: &tree_sitter::Node<'a>,
+    kind: &str,
+    callback: &mut dyn FnMut(&tree_sitter::Node<'a>),
+) {
+    if node.kind() == kind {
+        callback(node);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_for_kind(&child, kind, callback);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,8 +442,14 @@ mod tests {
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
         let cls = symbols.iter().find(|s| s.name == "AppDelegate").unwrap();
         assert_eq!(cls.kind, SymbolKind::Class);
-        assert!(cls.parents.iter().any(|(p, k)| p == "UIResponder" && k == "extends"));
-        assert!(cls.parents.iter().any(|(p, k)| p == "UIApplicationDelegate" && k == "implements"));
+        assert!(cls
+            .parents
+            .iter()
+            .any(|(p, k)| p == "UIResponder" && k == "extends"));
+        assert!(cls
+            .parents
+            .iter()
+            .any(|(p, k)| p == "UIApplicationDelegate" && k == "implements"));
     }
 
     #[test]
@@ -300,11 +488,18 @@ mod tests {
 
     #[test]
     fn test_parse_extension() {
-        let content = "extension String: CustomProtocol {\n    func trimmed() -> String { self }\n}\n";
+        let content =
+            "extension String: CustomProtocol {\n    func trimmed() -> String { self }\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        let ext = symbols.iter().find(|s| s.name == "String+Extension").unwrap();
+        let ext = symbols
+            .iter()
+            .find(|s| s.name == "String+Extension")
+            .unwrap();
         assert_eq!(ext.kind, SymbolKind::Object);
-        assert!(ext.parents.iter().any(|(p, k)| p == "String" && k == "extends"));
+        assert!(ext
+            .parents
+            .iter()
+            .any(|(p, k)| p == "String" && k == "extends"));
     }
 
     #[test]
@@ -317,18 +512,27 @@ mod tests {
 
     #[test]
     fn test_parse_init() {
-        let content = "class Foo {\n    public init(name: String) {\n        self.name = name\n    }\n}\n";
+        let content =
+            "class Foo {\n    public init(name: String) {\n        self.name = name\n    }\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        assert!(symbols.iter().any(|s| s.name == "init" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "init" && s.kind == SymbolKind::Function));
     }
 
     #[test]
     fn test_parse_property() {
         let content = "class Foo {\n    var name: String = \"\"\n    let count: Int = 0\n    static var shared: Foo = Foo()\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property));
-        assert!(symbols.iter().any(|s| s.name == "count" && s.kind == SymbolKind::Property));
-        assert!(symbols.iter().any(|s| s.name == "shared" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "name" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "count" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "shared" && s.kind == SymbolKind::Property));
     }
 
     #[test]
@@ -343,7 +547,9 @@ mod tests {
     fn test_parse_nested_function() {
         let content = "class ViewController {\n    func loadData() async throws -> Data {\n        fatalError()\n    }\n}\n";
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
-        assert!(symbols.iter().any(|s| s.name == "loadData" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "loadData" && s.kind == SymbolKind::Function));
     }
 
     #[test]
@@ -374,6 +580,118 @@ mod tests {
         assert!(cls.parents.is_empty());
     }
 
+    // === Issue #1: Incorrect parent classification for structs/enums ===
+
+    #[test]
+    fn test_struct_parents_all_implements() {
+        // Structs can't have superclasses — all parents are protocol conformances
+        let content = "struct User: Codable, Equatable {\n    let id: Int\n}\n";
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let s = symbols.iter().find(|s| s.name == "User").unwrap();
+        // Both should be "implements", not first="extends"
+        assert!(
+            s.parents.iter().all(|(_, k)| k == "implements"),
+            "struct parents should all be 'implements', got: {:?}",
+            s.parents
+        );
+    }
+
+    #[test]
+    fn test_enum_raw_value_not_extends() {
+        // enum Foo: String — String is RawRepresentable conformance, not superclass
+        let content = "enum Direction: String, CaseIterable {\n    case north\n}\n";
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let e = symbols.iter().find(|s| s.name == "Direction").unwrap();
+        assert!(
+            e.parents.iter().all(|(_, k)| k == "implements"),
+            "enum parents should all be 'implements', got: {:?}",
+            e.parents
+        );
+    }
+
+    #[test]
+    fn test_actor_parents_all_implements() {
+        // Actors can't inherit from classes — all parents are protocol conformances
+        let content = "actor DataStore: Sendable, CustomStringConvertible {\n}\n";
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let a = symbols.iter().find(|s| s.name == "DataStore").unwrap();
+        assert!(
+            a.parents.iter().all(|(_, k)| k == "implements"),
+            "actor parents should all be 'implements', got: {:?}",
+            a.parents
+        );
+    }
+
+    // === Issue #4: Signature is single-line ===
+
+    #[test]
+    fn test_multiline_func_signature() {
+        let content = r#"
+public func configure(
+    with model: ViewModel,
+    animated: Bool
+) -> Result<Void, Error> {
+    fatalError()
+}
+"#;
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let f = symbols.iter().find(|s| s.name == "configure").unwrap();
+        // Signature should contain the full declaration, not just the first line
+        assert!(
+            f.signature.contains("animated: Bool"),
+            "signature should include all parameters, got: {:?}",
+            f.signature
+        );
+    }
+
+    #[test]
+    fn test_protocol_func_signature_no_body() {
+        let content = r#"
+protocol Service {
+    func fetchItems(
+        matching query: String,
+        limit: Int
+    ) async throws -> [Item]
+}
+"#;
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let f = symbols.iter().find(|s| s.name == "fetchItems").unwrap();
+        // Protocol functions have no body — signature should still capture all parameters
+        assert!(
+            f.signature.contains("limit: Int"),
+            "protocol func signature should include all parameters, got: {:?}",
+            f.signature
+        );
+        assert!(
+            f.signature.contains("async throws"),
+            "protocol func signature should include async throws, got: {:?}",
+            f.signature
+        );
+    }
+
+    // === Issue #8: Extension conformances not captured ===
+
+    #[test]
+    fn test_extension_conformances_captured() {
+        let content = "extension MyStruct: Codable, Equatable {\n}\n";
+        let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
+        let ext = symbols
+            .iter()
+            .find(|s| s.name == "MyStruct+Extension")
+            .unwrap();
+        // Extension should record all protocol conformances, not just the base type
+        assert!(
+            ext.parents.iter().any(|(p, _)| p == "Codable"),
+            "extension should capture Codable conformance, got: {:?}",
+            ext.parents
+        );
+        assert!(
+            ext.parents.iter().any(|(p, _)| p == "Equatable"),
+            "extension should capture Equatable conformance, got: {:?}",
+            ext.parents
+        );
+    }
+
     #[test]
     fn test_parse_multiple_declarations() {
         let content = r#"
@@ -393,16 +711,38 @@ typealias Completion = (Result<Data, Error>) -> Void
         let symbols = SWIFT_PARSER.parse_symbols(content).unwrap();
 
         // Check that all major declarations are found
-        assert!(symbols.iter().any(|s| s.name == "ViewController" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "User" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "Direction" && s.kind == SymbolKind::Enum));
-        assert!(symbols.iter().any(|s| s.name == "Fetchable" && s.kind == SymbolKind::Interface));
-        assert!(symbols.iter().any(|s| s.name == "DataStore" && s.kind == SymbolKind::Class));
-        assert!(symbols.iter().any(|s| s.name == "String+Extension" && s.kind == SymbolKind::Object));
-        assert!(symbols.iter().any(|s| s.name == "Completion" && s.kind == SymbolKind::TypeAlias));
-        assert!(symbols.iter().any(|s| s.name == "loadData" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "init" && s.kind == SymbolKind::Function));
-        assert!(symbols.iter().any(|s| s.name == "name" && s.kind == SymbolKind::Property));
-        assert!(symbols.iter().any(|s| s.name == "count" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "ViewController" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "User" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Direction" && s.kind == SymbolKind::Enum));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Fetchable" && s.kind == SymbolKind::Interface));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "DataStore" && s.kind == SymbolKind::Class));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "String+Extension" && s.kind == SymbolKind::Object));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Completion" && s.kind == SymbolKind::TypeAlias));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "loadData" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "init" && s.kind == SymbolKind::Function));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "name" && s.kind == SymbolKind::Property));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "count" && s.kind == SymbolKind::Property));
     }
 }
