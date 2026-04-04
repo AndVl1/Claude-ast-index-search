@@ -59,7 +59,7 @@ brew install ast-index
 git clone https://github.com/defendend/Claude-ast-index-search.git
 cd Claude-ast-index-search
 cargo build --release
-# Binary: target/release/ast-index (~40 MB)
+# Binary: target/release/ast-index (~44 MB)
 ```
 
 ### Troubleshooting: Syntax errors on install
@@ -344,7 +344,7 @@ Benchmarks on large Android project (~29k files, ~300k symbols):
 
 | Metric | Rust | Python |
 |--------|------|--------|
-| Binary | ~4.4 MB | ~273 MB (venv) |
+| Binary | ~44 MB | ~273 MB (venv) |
 | DB size | 180 MB | ~100 MB |
 | Symbols | 299,393 | 264,023 |
 | Refs | 900,079 | 438,208 |
