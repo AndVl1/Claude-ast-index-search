@@ -116,6 +116,9 @@ pub struct ProjectConfig {
     pub project_type: Option<String>,
     pub roots: Option<Vec<String>>,
     pub exclude: Option<Vec<String>>,
+    /// Allow-list: only index these directories (relative to root).
+    /// When set, only matching top-level directories are indexed; everything else is skipped.
+    pub include: Option<Vec<String>>,
     pub no_ignore: Option<bool>,
 }
 
@@ -177,7 +180,9 @@ pub fn has_ios_markers(root: &Path) -> bool {
 /// Find immediate subdirectories that are project roots.
 /// Returns list of (path, project_type) for dirs with recognized project markers.
 /// If 2+ subdirs have markers, treats root as monorepo and includes ALL subdirs.
-pub fn find_sub_projects(root: &Path) -> Vec<(PathBuf, ProjectType)> {
+/// `exclude` — optional gitignore-style matcher anchored to `root`; matching dirs are skipped.
+/// `include` — optional allow-list; when set, only dirs matching include paths are kept.
+pub fn find_sub_projects(root: &Path, exclude: Option<&ignore::gitignore::Gitignore>, include: Option<&[String]>) -> Vec<(PathBuf, ProjectType)> {
     let mut marked = Vec::new();
     let mut all_dirs = Vec::new();
     let entries = match fs::read_dir(root) {
@@ -189,10 +194,27 @@ pub fn find_sub_projects(root: &Path) -> Vec<(PathBuf, ProjectType)> {
         if !path.is_dir() {
             continue;
         }
-        // Skip hidden and excluded dirs
+        // Skip hidden and hard-coded excluded dirs
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
             if name.starts_with('.') || EXCLUDED_DIRS.contains(&name) {
                 continue;
+            }
+        }
+        // Skip dirs matching config exclude patterns
+        if let Some(m) = exclude {
+            if m.matched(&path, true).is_ignore() {
+                continue;
+            }
+        }
+        // Check include allow-list
+        if let Some(inc) = include {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let matched = inc.iter().any(|i| {
+                    i == name || i.starts_with(&format!("{}/", name))
+                });
+                if !matched {
+                    continue;
+                }
             }
         }
         let pt = detect_project_type(&path);
@@ -689,8 +711,20 @@ pub fn index_directory_scoped(conn: &mut Connection, root: &Path, walk_dir: &Pat
     let arc_root = if no_ignore { None } else { find_arc_root(walk_dir).or_else(|| find_arc_root(root)) };
     if verbose { eprintln!("[verbose] find_arc_root: {:?} in {:?}", arc_root.as_ref().map(|p| p.display().to_string()), t.elapsed()); }
 
-    // Collect extra exclude dirs from config
-    let extra_exc: Vec<String> = extra_exclude.unwrap_or(&[]).to_vec();
+    // Build gitignore-style exclude matcher from config patterns.
+    // Full gitignore semantics: *, **, ?, [abc], leading / anchors to walk_dir, trailing / = dirs only.
+    let exclude_matcher: Option<ignore::gitignore::Gitignore> = {
+        let patterns = extra_exclude.unwrap_or(&[]);
+        if patterns.is_empty() {
+            None
+        } else {
+            let mut gb = ignore::gitignore::GitignoreBuilder::new(walk_dir);
+            for p in patterns {
+                gb.add_line(None, p).ok();
+            }
+            gb.build().ok()
+        }
+    };
 
     let mut builder = WalkBuilder::new(walk_dir);
     builder
@@ -703,12 +737,10 @@ pub fn index_directory_scoped(conn: &mut Connection, root: &Path, walk_dir: &Pat
             if is_excluded_dir(entry) {
                 return false;
             }
-            // Check extra exclude dirs from config
-            if !extra_exc.is_empty() && entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                if let Some(name) = entry.path().file_name().and_then(|n| n.to_str()) {
-                    if extra_exc.iter().any(|e| e == name) {
-                        return false;
-                    }
+            if let Some(ref matcher) = exclude_matcher {
+                let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                if matcher.matched(entry.path(), is_dir).is_ignore() {
+                    return false;
                 }
             }
             true

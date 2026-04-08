@@ -248,6 +248,17 @@ enum Commands {
         /// Number of parallel threads (default: CPU cores, max 8; increase for network filesystems)
         #[arg(long, short = 'j')]
         threads: Option<usize>,
+        /// Only index these directories (allow-list, can be repeated).
+        /// Overrides config `include`. Example: --include smart_devices --include lib
+        #[arg(long = "include")]
+        include: Vec<String>,
+        /// Exclude directories matching gitignore-style patterns (can be repeated).
+        /// Merged with config `exclude`. Example: --exclude vendor --exclude "proto/gen"
+        #[arg(long = "exclude")]
+        exclude: Vec<String>,
+        /// Additional paths to index (can be specified multiple times).
+        #[arg(long = "path")]
+        paths: Vec<String>,
     },
     /// Update index (incremental)
     Update,
@@ -680,12 +691,12 @@ fn main() -> Result<()> {
         Commands::Flows { query, limit } => commands::grep::cmd_flows(&root, query.as_deref(), limit),
         Commands::Previews { query, limit } => commands::grep::cmd_previews(&root, query.as_deref(), limit),
         // Management commands
-        Commands::Rebuild { r#type, no_deps, no_ignore, sub_projects, project_type, verbose, threads } => {
+        Commands::Rebuild { r#type, no_deps, no_ignore, sub_projects, project_type, verbose, threads, include, exclude, paths } => {
             if let Some(t) = threads {
                 std::env::set_var("AST_INDEX_THREADS", t.to_string());
             }
             let pt_override = project_type.as_ref().and_then(|s| indexer::ProjectType::from_str(s));
-            commands::management::cmd_rebuild(&root, &r#type, !no_deps, no_ignore, sub_projects, pt_override, verbose)
+            commands::management::cmd_rebuild(&root, &r#type, !no_deps, no_ignore, sub_projects, pt_override, verbose, &include, &exclude, &paths)
         }
         Commands::Update => commands::management::cmd_update(&root),
         Commands::Restore { path } => commands::management::cmd_restore(&root, &path),

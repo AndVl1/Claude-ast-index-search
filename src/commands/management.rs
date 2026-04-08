@@ -18,8 +18,17 @@ use crate::indexer;
 /// File count threshold for auto-switching to sub-projects mode
 const AUTO_SUB_PROJECTS_THRESHOLD: usize = 65_000;
 
+/// Build a gitignore-style exclude matcher anchored to `root` from config patterns.
+fn build_exclude_matcher(root: &std::path::Path, patterns: Option<&[String]>) -> Option<ignore::gitignore::Gitignore> {
+    let patterns = patterns?;
+    if patterns.is_empty() { return None; }
+    let mut gb = ignore::gitignore::GitignoreBuilder::new(root);
+    for p in patterns { gb.add_line(None, p).ok(); }
+    gb.build().ok()
+}
+
 /// Rebuild the index (full or partial)
-pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: bool, sub_projects: bool, project_type: Option<indexer::ProjectType>, verbose: bool) -> Result<()> {
+pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: bool, sub_projects: bool, project_type: Option<indexer::ProjectType>, verbose: bool, cli_include: &[String], cli_exclude: &[String], extra_paths: &[String]) -> Result<()> {
     if verbose {
         std::env::set_var("AST_INDEX_VERBOSE", "1");
         eprintln!("[verbose] rebuild started for: {}", root.display());
@@ -38,18 +47,39 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
     let project_type = project_type.or_else(|| {
         config.project_type.as_deref().and_then(indexer::ProjectType::from_str)
     });
-    let config_exclude = config.exclude.clone();
+    // Merge CLI flags with config: CLI overrides config
+    let mut merged_exclude: Vec<String> = config.exclude.unwrap_or_default();
+    for e in cli_exclude {
+        if !merged_exclude.contains(e) { merged_exclude.push(e.clone()); }
+    }
+    let config_exclude: Option<Vec<String>> = if merged_exclude.is_empty() { None } else { Some(merged_exclude) };
+
+    let mut merged_include: Vec<String> = config.include.unwrap_or_default();
+    for i in cli_include {
+        if !merged_include.contains(i) { merged_include.push(i.clone()); }
+    }
+    let config_include: Option<Vec<String>> = if merged_include.is_empty() { None } else { Some(merged_include) };
+
     let config_roots = config.roots.clone();
 
-    // Explicit sub-projects mode
-    if sub_projects {
-        return cmd_rebuild_sub_projects(root, index_type, index_deps, no_ignore, verbose);
+    // Build exclude matcher once — reused for sub-project filtering and directory walks
+    let exclude_matcher = build_exclude_matcher(root, config_exclude.as_deref());
+
+    if verbose {
+        if let Some(ref inc) = config_include { eprintln!("[verbose] include (allow-list): {:?}", inc); }
+        if let Some(ref exc) = config_exclude { eprintln!("[verbose] exclude: {} patterns", exc.len()); }
     }
 
-    // Auto-detect: if sub-projects exist and file count >= threshold, switch automatically
+    // Explicit sub-projects mode (--sub-projects flag)
+    if sub_projects {
+        return cmd_rebuild_sub_projects(root, index_type, index_deps, no_ignore, verbose,
+                                        config_exclude.as_deref(), config_include.as_deref(), exclude_matcher.as_ref());
+    }
+
+    // Auto-detect: scan immediate subdirs (with exclude+include filter) and check file count
     if index_type == "all" {
         let t = Instant::now();
-        let subs = indexer::find_sub_projects(root);
+        let subs = indexer::find_sub_projects(root, exclude_matcher.as_ref(), config_include.as_deref());
         if verbose {
             eprintln!("[verbose] find_sub_projects: {} found in {:?}", subs.len(), t.elapsed());
         }
@@ -68,7 +98,8 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
                         AUTO_SUB_PROJECTS_THRESHOLD, subs.len()
                     ).yellow()
                 );
-                return cmd_rebuild_sub_projects(root, index_type, index_deps, no_ignore, verbose);
+                return cmd_rebuild_sub_projects(root, index_type, index_deps, no_ignore, verbose,
+                                                config_exclude.as_deref(), config_include.as_deref(), exclude_matcher.as_ref());
             }
         }
     }
@@ -116,7 +147,7 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
     db::init_db(&conn)?;
     if verbose { eprintln!("[verbose] DB opened + schema created in {:?}", t.elapsed()); }
 
-    // Merge config roots with saved extra roots
+    // Merge config roots + saved extra roots + CLI --path args
     let mut all_extra_roots = saved_extra_roots;
     if let Some(ref config_roots) = config_roots {
         for cr in config_roots {
@@ -130,6 +161,19 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
             if !all_extra_roots.contains(&resolved) {
                 all_extra_roots.push(resolved);
             }
+        }
+    }
+    for p in extra_paths {
+        let resolved = if std::path::Path::new(p).is_absolute() {
+            p.clone()
+        } else {
+            root.join(p).canonicalize()
+                .map(|pp| pp.to_string_lossy().to_string())
+                .unwrap_or_else(|_| root.join(p).to_string_lossy().to_string())
+        };
+        if !all_extra_roots.contains(&resolved) {
+            if verbose { eprintln!("[verbose] adding --path: {}", resolved); }
+            all_extra_roots.push(resolved);
         }
     }
 
@@ -175,7 +219,7 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
                 if extra_path.exists() {
                     if verbose { eprintln!("[verbose] indexing extra root: {}", extra_root); }
                     let t = Instant::now();
-                    let extra_walk = indexer::index_directory(&mut conn, extra_path, true, no_ignore)?;
+                    let extra_walk = indexer::index_directory_with_config(&mut conn, extra_path, true, no_ignore, None, config_exclude.as_deref())?;
                     file_count += extra_walk.file_count;
                     all_module_files.extend(extra_walk.module_files);
                     if verbose { eprintln!("[verbose] extra root: {} files in {:?}", extra_walk.file_count, t.elapsed()); }
@@ -337,8 +381,19 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
     Ok(())
 }
 
-/// Rebuild index for each sub-project into a single shared DB for root
-fn cmd_rebuild_sub_projects(root: &Path, _index_type: &str, _index_deps: bool, no_ignore: bool, verbose: bool) -> Result<()> {
+/// Rebuild index for each sub-project into a single shared DB for root.
+/// `config_include` — allow-list of directories (relative to root); when set, only matching dirs are indexed.
+/// `exclude_matcher` — gitignore-style matcher for filtering sub-projects.
+fn cmd_rebuild_sub_projects(
+    root: &Path,
+    _index_type: &str,
+    _index_deps: bool,
+    no_ignore: bool,
+    verbose: bool,
+    extra_exclude: Option<&[String]>,
+    config_include: Option<&[String]>,
+    exclude_matcher: Option<&ignore::gitignore::Gitignore>,
+) -> Result<()> {
     let start = Instant::now();
 
     // Acquire exclusive lock to prevent concurrent rebuilds
@@ -348,7 +403,7 @@ fn cmd_rebuild_sub_projects(root: &Path, _index_type: &str, _index_deps: bool, n
     if verbose { eprintln!("[verbose] lock acquired in {:?}", t.elapsed()); }
 
     let t = Instant::now();
-    let sub_projects = indexer::find_sub_projects(root);
+    let sub_projects = indexer::find_sub_projects(root, exclude_matcher, config_include);
     if verbose { eprintln!("[verbose] find_sub_projects: {} in {:?}", sub_projects.len(), t.elapsed()); }
     if sub_projects.is_empty() {
         println!("{}", "No sub-projects found. Use 'rebuild' without --sub-projects.".yellow());
@@ -396,7 +451,7 @@ fn cmd_rebuild_sub_projects(root: &Path, _index_type: &str, _index_deps: bool, n
         );
 
         let t = Instant::now();
-        match indexer::index_directory_scoped(&mut conn, root, path, true, no_ignore, None, None) {
+        match indexer::index_directory_scoped(&mut conn, root, path, true, no_ignore, None, extra_exclude) {
             Ok(walk) => {
                 total_files += walk.file_count;
                 if verbose {
