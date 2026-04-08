@@ -11,6 +11,34 @@ use notify_debouncer_mini::new_debouncer;
 
 use crate::{db, indexer, parsers};
 
+/// Acquire an exclusive lock for watch mode, scoped to project root.
+/// Returns the lock file handle (lock held while handle is alive).
+/// Returns None if another watch is already running for this project.
+fn try_acquire_watch_lock(root: &Path) -> Option<std::fs::File> {
+    use fs2::FileExt;
+    let lock_path = db::get_db_path(root).ok()?
+        .with_extension("watch.lock");
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&lock_path)
+        .ok()?;
+    // Try non-blocking exclusive lock
+    match file.try_lock_exclusive() {
+        Ok(()) => {
+            // Write PID for debugging
+            use std::io::Write;
+            let mut f = &file;
+            let _ = write!(f, "{}", std::process::id());
+            Some(file)
+        }
+        Err(_) => None, // another watch is running
+    }
+}
+
 /// Watch for file changes and incrementally update the index
 pub fn cmd_watch(root: &Path) -> Result<()> {
     if !db::db_exists(root) {
@@ -20,6 +48,15 @@ pub fn cmd_watch(root: &Path) -> Result<()> {
         );
         return Ok(());
     }
+
+    // Ensure only one watch process runs at a time
+    let _lock = match try_acquire_watch_lock(root) {
+        Some(lock) => lock,
+        None => {
+            eprintln!("{}", "Another ast-index watch is already running.".yellow());
+            return Ok(());
+        }
+    };
 
     println!(
         "{}",
