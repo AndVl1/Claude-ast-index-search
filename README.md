@@ -424,6 +424,14 @@ exclude:
 
 ## Changelog
 
+### 3.36.0
+- **Monorepo exclude/include support**:
+  - `exclude` config now works in sub-projects mode — previously was silently ignored when auto-switching to sub-projects
+  - `exclude` now uses full gitignore syntax (`*`, `**`, `?`, path-based patterns like `proto/gen`)
+  - Extra roots now indexed with `exclude` filter (was missing)
+  - New `include` allow-list in `.ast-index.yaml` — only index matching directories, skip everything else. Ideal for large monorepos where you need a handful of dirs
+  - New CLI flags: `--include`, `--exclude`, `--path` for `rebuild` command
+
 ### 3.35.0
 - **BSL fixes** (issue #19 by @colegero):
   - **Module indexing** — 1C modules now extracted from directory paths (`CommonModules/X/` → `X`, `Documents/Y/` → `Документ.Y`, etc.), fixes `Modules: 0` on 1C configurations. Supports 35+ 1C metadata collections.
