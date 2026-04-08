@@ -424,6 +424,9 @@ exclude:
 
 ## Changelog
 
+### 3.36.1
+- `watch` command: per-project flock to prevent duplicate watchers
+
 ### 3.36.0
 - **Monorepo exclude/include support**:
   - `exclude` config now works in sub-projects mode — previously was silently ignored when auto-switching to sub-projects
