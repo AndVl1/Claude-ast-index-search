@@ -424,6 +424,9 @@ exclude:
 
 ## Changelog
 
+### 3.36.2
+- Release build check
+
 ### 3.36.1
 - `watch` command: per-project flock to prevent duplicate watchers
 
