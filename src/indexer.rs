@@ -181,8 +181,27 @@ pub fn has_ios_markers(root: &Path) -> bool {
 /// Returns list of (path, project_type) for dirs with recognized project markers.
 /// If 2+ subdirs have markers, treats root as monorepo and includes ALL subdirs.
 /// `exclude` — optional gitignore-style matcher anchored to `root`; matching dirs are skipped.
-/// `include` — optional allow-list; when set, only dirs matching include paths are kept.
+/// `include` — optional allow-list. When set, include entries are treated as explicit
+/// scoped roots (relative to `root`), and can point to arbitrarily nested directories —
+/// not just immediate subdirs of `root`. Each include entry becomes a separate sub-project.
 pub fn find_sub_projects(root: &Path, exclude: Option<&ignore::gitignore::Gitignore>, include: Option<&[String]>) -> Vec<(PathBuf, ProjectType)> {
+    // When include is explicitly set, honor it literally: each entry is a scoped root.
+    // This allows deep paths like "smart_devices/tools/burn_data" instead of being forced
+    // to top-level subdirs only.
+    if let Some(inc) = include {
+        let mut result: Vec<(PathBuf, ProjectType)> = Vec::new();
+        for entry in inc {
+            let path = root.join(entry);
+            if !path.is_dir() {
+                continue;
+            }
+            let pt = detect_project_type(&path);
+            result.push((path, pt));
+        }
+        result.sort_by(|a, b| a.0.cmp(&b.0));
+        return result;
+    }
+
     let mut marked = Vec::new();
     let mut all_dirs = Vec::new();
     let entries = match fs::read_dir(root) {
@@ -204,17 +223,6 @@ pub fn find_sub_projects(root: &Path, exclude: Option<&ignore::gitignore::Gitign
         if let Some(m) = exclude {
             if m.matched(&path, true).is_ignore() {
                 continue;
-            }
-        }
-        // Check include allow-list
-        if let Some(inc) = include {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                let matched = inc.iter().any(|i| {
-                    i == name || i.starts_with(&format!("{}/", name))
-                });
-                if !matched {
-                    continue;
-                }
             }
         }
         let pt = detect_project_type(&path);
@@ -648,6 +656,8 @@ pub fn is_excluded_dir(entry: &ignore::DirEntry) -> bool {
 fn is_module_file(name: &str) -> bool {
     name == "build.gradle" || name == "build.gradle.kts" || name == "Package.swift" || name.ends_with(".pm")
         || name == "pom.xml"
+        || name == "pyproject.toml" || name == "setup.py" || name == "setup.cfg"
+        || name == "ya.make"
 }
 
 /// Result of the filesystem walk in index_directory.
@@ -1126,6 +1136,10 @@ pub fn index_modules_from_files(conn: &Connection, root: &Path, files: &[PathBuf
 
     let spm_target_re = &*SPM_TARGET_RE;
 
+    // Outer repository root — used to normalize ya.make module paths so they match PEERDIR
+    // entries, which are written relative to the outer repo root, not the rebuild root.
+    let mono_root = find_arc_root(root);
+
     for path in files {
 
         if let Some(name) = path.file_name() {
@@ -1247,13 +1261,148 @@ pub fn index_modules_from_files(conn: &Connection, root: &Path, files: &[PathBuf
                     }
                 }
             }
+
+            // ya.make build files — each directory with ya.make is a module, keyed by
+            // its path relative to the outer repo root so that PEERDIR entries (which
+            // use repo-root-relative paths) can be matched by literal lookup.
+            if name_str == "ya.make" {
+                if let Some(parent) = path.parent() {
+                    // Prefer monorepo-root-relative; fall back to rebuild-root-relative if not in a monorepo
+                    let rel = if let Some(ref mono) = mono_root {
+                        parent.strip_prefix(mono).ok()
+                    } else {
+                        None
+                    }
+                    .or_else(|| parent.strip_prefix(root).ok())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| parent.to_path_buf());
+
+                    let module_name = rel.to_string_lossy().replace('\\', "/");
+                    let module_path = parent
+                        .strip_prefix(root)
+                        .unwrap_or(parent)
+                        .to_string_lossy()
+                        .to_string();
+
+                    if !module_name.is_empty() {
+                        conn.execute(
+                            "INSERT OR IGNORE INTO modules (name, path, kind) VALUES (?1, ?2, ?3)",
+                            rusqlite::params![module_name, module_path, "ya.make"],
+                        )?;
+                        count += 1;
+                    }
+                }
+            }
+
+            // Python modules (pyproject.toml, setup.py, setup.cfg)
+            if name_str == "pyproject.toml" || name_str == "setup.py" || name_str == "setup.cfg" {
+                if let Some(parent) = path.parent() {
+                    let module_path = parent
+                        .strip_prefix(root)
+                        .unwrap_or(parent)
+                        .to_string_lossy()
+                        .to_string();
+
+                    // Use directory name as module name
+                    let module_name = if module_path.is_empty() {
+                        // Root project — try to extract name from pyproject.toml
+                        if name_str == "pyproject.toml" {
+                            if let Ok(content) = fs::read_to_string(path) {
+                                extract_python_module_name(&content)
+                                    .unwrap_or_else(|| root.file_name()
+                                        .and_then(|n| n.to_str())
+                                        .unwrap_or("root")
+                                        .to_string())
+                            } else {
+                                root.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("root")
+                                    .to_string()
+                            }
+                        } else {
+                            root.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("root")
+                                .to_string()
+                        }
+                    } else {
+                        module_path.replace('/', ".")
+                    };
+
+                    if !module_name.is_empty() {
+                        conn.execute(
+                            "INSERT OR IGNORE INTO modules (name, path) VALUES (?1, ?2)",
+                            rusqlite::params![module_name, module_path],
+                        )?;
+                        count += 1;
+                    }
+                }
+            }
         }
     }
 
     Ok(count)
 }
 
-/// Collect build files (Gradle, Maven) from module paths in DB (for standalone rebuild modules/deps)
+/// Extract quoted strings from a Python/TOML list body (the text inside [...]).
+/// Handles both single and double quotes and ignores comments.
+fn extract_py_list_strings(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = body.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'"' || c == b'\'' {
+            let quote = c;
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != quote {
+                if bytes[j] == b'\\' && j + 1 < bytes.len() {
+                    j += 2;
+                    continue;
+                }
+                j += 1;
+            }
+            if j < bytes.len() {
+                if let Ok(s) = std::str::from_utf8(&bytes[start..j]) {
+                    out.push(s.to_string());
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        if c == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Strip PEP 508 version specifiers / extras / markers from a dependency string,
+/// returning just the package name. e.g. "foo[extra]>=1.0; python_version>='3.8'" -> "foo"
+fn strip_py_version(dep: &str) -> String {
+    let dep = dep.trim();
+    let end = dep.find(|c: char| {
+        c == '[' || c == '<' || c == '>' || c == '=' || c == '!' || c == '~' || c == ';' || c == ' '
+    }).unwrap_or(dep.len());
+    dep[..end].to_string()
+}
+
+/// Extract project name from pyproject.toml content
+fn extract_python_module_name(content: &str) -> Option<String> {
+    static PYPROJECT_NAME_RE: LazyLock<Regex> = LazyLock::new(||
+        Regex::new(r#"(?m)^\s*name\s*=\s*["']([^"']+)["']"#).unwrap()
+    );
+    let re = &*PYPROJECT_NAME_RE;
+    re.captures(content)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+}
+
+/// Collect build files (Gradle, Maven, ya.make, Python) from module paths in DB (for standalone rebuild modules/deps)
 pub fn collect_build_files_from_db(conn: &Connection, root: &Path) -> Result<Vec<PathBuf>> {
     let mut stmt = conn.prepare("SELECT path FROM modules")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
@@ -1261,7 +1410,7 @@ pub fn collect_build_files_from_db(conn: &Connection, root: &Path) -> Result<Vec
     for row in rows {
         let module_path = row?;
         let dir = root.join(&module_path);
-        for name in &["build.gradle.kts", "build.gradle", "pom.xml"] {
+        for name in &["build.gradle.kts", "build.gradle", "pom.xml", "ya.make", "pyproject.toml", "setup.py", "setup.cfg"] {
             let p = dir.join(name);
             if p.exists() {
                 files.push(p);
@@ -1272,7 +1421,7 @@ pub fn collect_build_files_from_db(conn: &Connection, root: &Path) -> Result<Vec
     Ok(files)
 }
 
-/// Parse module dependencies from build.gradle files
+/// Parse module dependencies from collected build files (Gradle, Maven, ya.make, Python)
 pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_files: &[PathBuf], progress: bool) -> Result<usize> {
 
     // Regex patterns for dependency declarations
@@ -1285,6 +1434,32 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
     static GRADLE_PROJECT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)(api|implementation|compileOnly|testImplementation)\s*\(\s*project\s*\(\s*["']:([^"']+)["']\s*\)"#).unwrap());
 
     let gradle_project_re = &*GRADLE_PROJECT_RE;
+
+    // ya.make PEERDIR(...) — accepts one or more whitespace-separated paths
+    static PEERDIR_RE: LazyLock<Regex> = LazyLock::new(||
+        Regex::new(r"(?s)PEERDIR\s*\(\s*([^)]*)\s*\)").unwrap()
+    );
+    let peerdir_re = &*PEERDIR_RE;
+
+    // Python pyproject.toml: [project] dependencies = ["foo>=1.0", ...]
+    static PY_PROJECT_DEPS_RE: LazyLock<Regex> = LazyLock::new(||
+        Regex::new(r"(?ms)^\s*dependencies\s*=\s*\[([^\]]*)\]").unwrap()
+    );
+    let py_project_deps_re = &*PY_PROJECT_DEPS_RE;
+
+    // Python pyproject.toml poetry section: [tool.poetry.dependencies]
+    static PY_POETRY_SECTION_RE: LazyLock<Regex> = LazyLock::new(||
+        Regex::new(r"(?ms)^\s*\[\s*tool\.poetry\.dependencies\s*\]\s*$(.*?)(?:^\s*\[|\z)").unwrap()
+    );
+    let py_poetry_section_re = &*PY_POETRY_SECTION_RE;
+
+    // Python setup.py install_requires=[...]
+    static PY_SETUP_DEPS_RE: LazyLock<Regex> = LazyLock::new(||
+        Regex::new(r#"(?ms)install_requires\s*=\s*\[([^\]]*)\]"#).unwrap()
+    );
+    let py_setup_deps_re = &*PY_SETUP_DEPS_RE;
+
+    let mono_root = find_arc_root(root);
 
     // First, ensure all modules are indexed and get their IDs
     let module_ids: std::collections::HashMap<String, i64> = {
@@ -1322,59 +1497,149 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
         let maven_dep_re = &*MAVEN_DEP_RE;
 
         for path in gradle_files {
-            if let Some(parent) = path.parent() {
-                let module_path = parent
-                    .strip_prefix(root)
-                    .unwrap_or(parent)
-                    .to_string_lossy()
-                    .to_string();
-                let module_name = module_path.replace('/', ".");
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let parent = match path.parent() {
+                Some(p) => p,
+                None => continue,
+            };
 
-                if let Some(&module_id) = module_ids.get(&module_name) {
-                    // Read build file content
-                    if let Ok(content) = fs::read_to_string(path) {
-                        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-                        if file_name == "pom.xml" {
-                            // Maven dependencies
-                            for caps in maven_dep_re.captures_iter(&content) {
-                                let artifact_id = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                                // Check if this artifactId matches a known module
-                                for (mod_name, &mod_id) in &module_ids {
-                                    // Match by last segment (artifactId typically matches the module name)
-                                    let last_segment = mod_name.rsplit('.').next().unwrap_or(mod_name);
-                                    if last_segment == artifact_id {
-                                        dep_stmt.execute(rusqlite::params![module_id, mod_id, "compile"])?;
-                                        dep_count += 1;
-                                    }
-                                }
-                            }
+            // Compute the source module name per build-system flavor (the key used in `modules.name`)
+            let source_module_name: String = match file_name {
+                "ya.make" => {
+                    let rel = if let Some(ref mono) = mono_root {
+                        parent.strip_prefix(mono).ok()
+                    } else {
+                        None
+                    }
+                    .or_else(|| parent.strip_prefix(root).ok())
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| parent.to_path_buf());
+                    rel.to_string_lossy().replace('\\', "/")
+                }
+                "pyproject.toml" | "setup.py" | "setup.cfg" => {
+                    let module_path = parent.strip_prefix(root).unwrap_or(parent).to_string_lossy().to_string();
+                    if module_path.is_empty() {
+                        // Root project — try pyproject.toml name, fall back to root dir name
+                        if file_name == "pyproject.toml" {
+                            fs::read_to_string(path).ok()
+                                .as_deref()
+                                .and_then(extract_python_module_name)
+                                .unwrap_or_else(|| root.file_name().and_then(|n| n.to_str()).unwrap_or("root").to_string())
                         } else {
-                            // Gradle dependencies
-                            // Parse projects DSL style dependencies
-                            for caps in projects_dep_re.captures_iter(&content) {
-                                let dep_kind = caps.get(1).map(|m| m.as_str()).unwrap_or("implementation");
-                                let dep_name = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                            root.file_name().and_then(|n| n.to_str()).unwrap_or("root").to_string()
+                        }
+                    } else {
+                        module_path.replace('/', ".")
+                    }
+                }
+                _ => {
+                    // Gradle / Maven: dot-separated path relative to rebuild root
+                    parent.strip_prefix(root).unwrap_or(parent).to_string_lossy().replace('/', ".")
+                }
+            };
 
+            let module_id = match module_ids.get(&source_module_name) {
+                Some(&id) => id,
+                None => continue,
+            };
+
+            let content = match fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            match file_name {
+                "pom.xml" => {
+                    for caps in maven_dep_re.captures_iter(&content) {
+                        let artifact_id = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                        for (mod_name, &mod_id) in &module_ids {
+                            let last_segment = mod_name.rsplit('.').next().unwrap_or(mod_name);
+                            if last_segment == artifact_id {
+                                dep_stmt.execute(rusqlite::params![module_id, mod_id, "compile"])?;
+                                dep_count += 1;
+                            }
+                        }
+                    }
+                }
+                "ya.make" => {
+                    for caps in peerdir_re.captures_iter(&content) {
+                        let raw = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                        for token in raw.split_ascii_whitespace() {
+                            // Trim trailing comments and separators
+                            let dep_name = token.trim_end_matches(',').trim();
+                            if dep_name.is_empty() || dep_name.starts_with('#') {
+                                continue;
+                            }
+                            let dep_name = dep_name.replace('\\', "/");
+                            if let Some(&dep_id) = module_ids.get(&dep_name) {
+                                dep_stmt.execute(rusqlite::params![module_id, dep_id, "peerdir"])?;
+                                dep_count += 1;
+                            }
+                        }
+                    }
+                }
+                "pyproject.toml" => {
+                    // [project] dependencies = [...]
+                    for caps in py_project_deps_re.captures_iter(&content) {
+                        let body = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                        for raw in extract_py_list_strings(body) {
+                            let dep_name = strip_py_version(&raw);
+                            if let Some(&dep_id) = module_ids.get(&dep_name) {
+                                dep_stmt.execute(rusqlite::params![module_id, dep_id, "compile"])?;
+                                dep_count += 1;
+                            }
+                        }
+                    }
+                    // [tool.poetry.dependencies] section — "name = ..." lines
+                    if let Some(caps) = py_poetry_section_re.captures(&content) {
+                        let section = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                        for line in section.lines() {
+                            let line = line.trim();
+                            if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
+                                continue;
+                            }
+                            if let Some(eq_pos) = line.find('=') {
+                                let dep_name = line[..eq_pos].trim().trim_matches('"').trim_matches('\'');
+                                if dep_name == "python" || dep_name.is_empty() {
+                                    continue;
+                                }
                                 if let Some(&dep_id) = module_ids.get(dep_name) {
-                                    dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
+                                    dep_stmt.execute(rusqlite::params![module_id, dep_id, "compile"])?;
                                     dep_count += 1;
                                 }
                             }
-
-                            // Parse standard Gradle style dependencies
-                            for caps in gradle_project_re.captures_iter(&content) {
-                                let dep_kind = caps.get(1).map(|m| m.as_str()).unwrap_or("implementation");
-                                let dep_path = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-
-                                // Convert :features:payments:api to features.payments.api
-                                let dep_name = dep_path.trim_start_matches(':').replace(':', ".");
-
-                                if let Some(&dep_id) = module_ids.get(&dep_name) {
-                                    dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
-                                    dep_count += 1;
-                                }
+                        }
+                    }
+                }
+                "setup.py" | "setup.cfg" => {
+                    for caps in py_setup_deps_re.captures_iter(&content) {
+                        let body = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                        for raw in extract_py_list_strings(body) {
+                            let dep_name = strip_py_version(&raw);
+                            if let Some(&dep_id) = module_ids.get(&dep_name) {
+                                dep_stmt.execute(rusqlite::params![module_id, dep_id, "compile"])?;
+                                dep_count += 1;
                             }
+                        }
+                    }
+                }
+                _ => {
+                    // Gradle
+                    for caps in projects_dep_re.captures_iter(&content) {
+                        let dep_kind = caps.get(1).map(|m| m.as_str()).unwrap_or("implementation");
+                        let dep_name = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                        if let Some(&dep_id) = module_ids.get(dep_name) {
+                            dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
+                            dep_count += 1;
+                        }
+                    }
+                    for caps in gradle_project_re.captures_iter(&content) {
+                        let dep_kind = caps.get(1).map(|m| m.as_str()).unwrap_or("implementation");
+                        let dep_path = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                        let dep_name = dep_path.trim_start_matches(':').replace(':', ".");
+                        if let Some(&dep_id) = module_ids.get(&dep_name) {
+                            dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
+                            dep_count += 1;
                         }
                     }
                 }
@@ -2431,6 +2696,7 @@ fn parse_dts_file(file_path: &Path, rel_path: &str) -> Result<ParsedFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db;
     use std::fs;
     use tempfile::TempDir;
 
@@ -2622,5 +2888,155 @@ mod tests {
         let result = parse_file(dir.path(), &py_file).unwrap();
         assert!(result.symbols.iter().any(|s| s.name == "Service"));
         assert!(result.symbols.iter().any(|s| s.name == "process"));
+    }
+
+    #[test]
+    fn test_extract_py_list_strings() {
+        let body = r#""foo>=1.0", "bar[extra]==2.0", 'baz; python_version>="3.8"'"#;
+        let v = extract_py_list_strings(body);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0], "foo>=1.0");
+        assert_eq!(v[1], "bar[extra]==2.0");
+    }
+
+    #[test]
+    fn test_strip_py_version() {
+        assert_eq!(strip_py_version("foo"), "foo");
+        assert_eq!(strip_py_version("foo>=1.0"), "foo");
+        assert_eq!(strip_py_version("foo[extra]==1.0"), "foo");
+        assert_eq!(strip_py_version("foo ~= 2.0"), "foo");
+        assert_eq!(strip_py_version("foo ; python_version>='3.8'"), "foo");
+    }
+
+    #[test]
+    fn test_index_modules_ya_make() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("library/cpp/foo")).unwrap();
+        fs::create_dir_all(root.join("app/main")).unwrap();
+        fs::write(root.join("library/cpp/foo/ya.make"), "LIBRARY()\nEND()\n").unwrap();
+        fs::write(
+            root.join("app/main/ya.make"),
+            "PROGRAM()\nPEERDIR(\n    library/cpp/foo\n)\nEND()\n",
+        )
+        .unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let files = vec![
+            root.join("library/cpp/foo/ya.make"),
+            root.join("app/main/ya.make"),
+        ];
+        index_modules_from_files(&conn, root, &files).unwrap();
+
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM modules ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(names.contains(&"library/cpp/foo".to_string()));
+        assert!(names.contains(&"app/main".to_string()));
+    }
+
+    #[test]
+    fn test_index_deps_ya_make_peerdir() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("lib/a")).unwrap();
+        fs::create_dir_all(root.join("lib/b")).unwrap();
+        fs::create_dir_all(root.join("app")).unwrap();
+        fs::write(root.join("lib/a/ya.make"), "LIBRARY()\nEND()\n").unwrap();
+        fs::write(root.join("lib/b/ya.make"), "LIBRARY()\nEND()\n").unwrap();
+        fs::write(
+            root.join("app/ya.make"),
+            "PROGRAM()\nPEERDIR(\n    lib/a\n    lib/b\n)\nEND()\n",
+        )
+        .unwrap();
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let files = vec![
+            root.join("lib/a/ya.make"),
+            root.join("lib/b/ya.make"),
+            root.join("app/ya.make"),
+        ];
+        index_modules_from_files(&conn, root, &files).unwrap();
+        let dep_count = index_module_dependencies(&mut conn, root, &files, false).unwrap();
+        assert_eq!(dep_count, 2);
+
+        let deps = get_module_deps(&conn, "app").unwrap();
+        let dep_names: Vec<String> = deps.iter().map(|(n, _, _)| n.clone()).collect();
+        assert!(dep_names.contains(&"lib/a".to_string()));
+        assert!(dep_names.contains(&"lib/b".to_string()));
+    }
+
+    #[test]
+    fn test_index_deps_python_pyproject() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("libs/shared")).unwrap();
+        fs::create_dir_all(root.join("services/api")).unwrap();
+        fs::write(
+            root.join("libs/shared/pyproject.toml"),
+            "[project]\nname = \"shared\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("services/api/pyproject.toml"),
+            "[project]\nname = \"api\"\ndependencies = [\n  \"libs.shared>=1.0\",\n  \"requests>=2.0\",\n]\n",
+        )
+        .unwrap();
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let files = vec![
+            root.join("libs/shared/pyproject.toml"),
+            root.join("services/api/pyproject.toml"),
+        ];
+        index_modules_from_files(&conn, root, &files).unwrap();
+        let dep_count = index_module_dependencies(&mut conn, root, &files, false).unwrap();
+        // Only the internal dep (libs.shared) should be matched; "requests" is external
+        assert_eq!(dep_count, 1);
+
+        let deps = get_module_deps(&conn, "services.api").unwrap();
+        let dep_names: Vec<String> = deps.iter().map(|(n, _, _)| n.clone()).collect();
+        assert!(dep_names.contains(&"libs.shared".to_string()));
+    }
+
+    #[test]
+    fn test_index_deps_python_poetry() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("libs/core")).unwrap();
+        fs::create_dir_all(root.join("app")).unwrap();
+        fs::write(
+            root.join("libs/core/pyproject.toml"),
+            "[project]\nname = \"core\"\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("app/pyproject.toml"),
+            "[tool.poetry]\nname = \"app\"\n\n[tool.poetry.dependencies]\npython = \"^3.10\"\n\"libs.core\" = \"^1.0\"\nexternal = \"^2.0\"\n",
+        )
+        .unwrap();
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let files = vec![
+            root.join("libs/core/pyproject.toml"),
+            root.join("app/pyproject.toml"),
+        ];
+        index_modules_from_files(&conn, root, &files).unwrap();
+        let dep_count = index_module_dependencies(&mut conn, root, &files, false).unwrap();
+        assert_eq!(dep_count, 1);
+
+        let deps = get_module_deps(&conn, "app").unwrap();
+        assert!(deps.iter().any(|(n, _, _)| n == "libs.core"));
     }
 }

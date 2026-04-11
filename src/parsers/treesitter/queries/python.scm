@@ -2,6 +2,12 @@
 (import_statement
   name: (dotted_name) @import_name)
 
+; Import: import X as Y
+(import_statement
+  name: (aliased_import
+    name: (dotted_name) @import_alias_original
+    alias: (identifier) @import_alias_name))
+
 ; Import: from X import Y, Z
 (import_from_statement
   module_name: (dotted_name) @import_from_module

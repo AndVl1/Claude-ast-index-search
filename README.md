@@ -424,6 +424,24 @@ exclude:
 
 ## Changelog
 
+### 3.37.0
+- **`outline` now uses tree-sitter for all languages** — Perl, Python, Go, C++, Kotlin previously used regex fallback with inaccurate results. Now routes through the same tree-sitter parsers used for indexing, with a generic fallback via `FileType::from_extension` covering ~30 languages. `outline` still works without a database, parsing the file on the fly (~5-50ms per file, e.g. 1806-line Kotlin file with 1298 symbols → 47ms)
+- **Python `import X as Y` now indexed** — `refs <module>` previously missed `import sqlalchemy as sa` while finding `from sqlalchemy import orm`. Tree-sitter query extended to emit both the original module name and the alias as `Import` symbols
+- **`ya.make` build system support**:
+  - `ya.make` files recognized as module markers during the single directory walk
+  - Module keys use the path relative to the outer repository root so that `PEERDIR(...)` entries — which are repo-root-relative — can be matched by literal lookup
+  - `PEERDIR(...)` parser handles both single- and multi-line blocks with whitespace-separated paths, emits entries with `dep_kind=peerdir`
+- **Python dependency parsing from `pyproject.toml` / `setup.py`**:
+  - `[project] dependencies = [...]` (PEP 621)
+  - `[tool.poetry.dependencies]` (skips `python` and external packages, matches only internal modules)
+  - `install_requires=[...]` in `setup.py`/`setup.cfg`
+  - Strips PEP 508 version specifiers, extras and markers to get just the package name
+  - Verified on real Python project: 126 modules / 267 deps detected
+- **Dep indexing no longer gated on Android** — the `Indexing module dependencies...` step used to run only when the project was detected as Android, silently skipping Java/Python/ya.make monorepos. Now runs whenever there are any modules in the index, regardless of build system
+- **`include` config now always routes through the scoped path** — previously an `include` allow-list only honored if auto-switch to sub-projects mode triggered (≥2 sub-projects AND ≥65k files). Small projects with `include` set fell through to the main branch which walked the entire root, silently ignoring the filter. Now `include` always forces scoped walking of only the listed directories, with a clear `Honoring include config (N paths)` message
+- **Nested `include` paths now work literally** — previously `include: [smart_devices/tools/burn_data]` would be expanded to the top-level `smart_devices/` directory (because `find_sub_projects` only matched immediate subdirs by name). A 300-path config ended up indexing the entire tree because each entry matched the outer dir. Now each include entry is taken as-is and becomes its own scoped root — `cmd_rebuild_sub_projects` walks exactly the listed paths, no wider. Sub-project display uses relative paths for nested entries
+- **`.h` file routing** — `detect_h_file_objc` promoted to `pub` so `outline` can use the same ObjC/C++ auto-detection that indexing uses
+
 ### 3.36.2
 - Release build check
 

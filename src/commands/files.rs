@@ -85,137 +85,29 @@ pub fn cmd_outline(root: &Path, file: &str) -> Result<()> {
 
     // Detect file type
     let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let is_perl = ext == "pm" || ext == "pl" || ext == "t";
-    let is_python = ext == "py";
-    let is_go = ext == "go";
-    let is_cpp = ext == "cpp" || ext == "cc" || ext == "c" || ext == "hpp" || ext == "h";
 
     println!("{}", format!("Outline of {}:", file).bold());
 
     let mut found = false;
 
-    if is_perl {
-        // Perl patterns
-        let package_re = Regex::new(r"^\s*package\s+([A-Za-z_][A-Za-z0-9_:]*)\s*;")?;
-        let sub_re = Regex::new(r"^\s*sub\s+([A-Za-z_][A-Za-z0-9_]*)")?;
-        let constant_re = Regex::new(r"^\s*use\s+constant\s+([A-Z_][A-Z0-9_]*)\s*=>")?;
-        let our_re = Regex::new(r"^\s*our\s+([\$@%][A-Za-z_][A-Za-z0-9_]*)")?;
-
-        for (line_num, line) in content.lines().enumerate() {
-            let line_num = line_num + 1;
-
-            if let Some(caps) = package_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [package]", format!(":{}", line_num).dimmed(), name.cyan());
-                found = true;
-            }
-
-            if let Some(caps) = sub_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [sub]", format!(":{}", line_num).dimmed(), name);
-                found = true;
-            }
-
-            if let Some(caps) = constant_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [constant]", format!(":{}", line_num).dimmed(), name);
-                found = true;
-            }
-
-            if let Some(caps) = our_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [our]", format!(":{}", line_num).dimmed(), name);
-                found = true;
-            }
-        }
-    } else if is_python {
-        // Python patterns
-        let class_re = Regex::new(r"^class\s+([A-Za-z_][A-Za-z0-9_]*)")?;
-        let func_re = Regex::new(r"^(async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)")?;
-
-        for (line_num, line) in content.lines().enumerate() {
-            let line_num = line_num + 1;
-
-            if let Some(caps) = class_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [class]", format!(":{}", line_num).dimmed(), name.cyan());
-                found = true;
-            }
-
-            if let Some(caps) = func_re.captures(line) {
-                let is_async = caps.get(1).is_some();
-                let name = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                let kind = if is_async { "async function" } else { "function" };
-                println!("  {} {} [{}]", format!(":{}", line_num).dimmed(), name, kind);
-                found = true;
-            }
-        }
-    } else if is_go {
-        // Go patterns
-        let package_re = Regex::new(r"^package\s+([a-z][a-z0-9_]*)")?;
-        let struct_re = Regex::new(r"^type\s+([A-Z][a-zA-Z0-9_]*)\s+struct")?;
-        let interface_re = Regex::new(r"^type\s+([A-Z][a-zA-Z0-9_]*)\s+interface")?;
-        let func_re = Regex::new(r"^func\s+(?:\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(")?;
-
-        for (line_num, line) in content.lines().enumerate() {
-            let line_num = line_num + 1;
-
-            if let Some(caps) = package_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [package]", format!(":{}", line_num).dimmed(), name.cyan());
-                found = true;
-            }
-
-            if let Some(caps) = struct_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [struct]", format!(":{}", line_num).dimmed(), name.cyan());
-                found = true;
-            }
-
-            if let Some(caps) = interface_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [interface]", format!(":{}", line_num).dimmed(), name.cyan());
-                found = true;
-            }
-
-            if let Some(caps) = func_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [func]", format!(":{}", line_num).dimmed(), name);
-                found = true;
-            }
-        }
-    } else if is_cpp {
-        // C++ patterns
-        let namespace_re = Regex::new(r"^namespace\s+([\w:]+)\s*\{")?;
-        let class_re = Regex::new(r"^(?:class|struct)\s+([A-Z][a-zA-Z0-9_]*)")?;
-        let func_re = Regex::new(r"^(?:[\w:]+(?:<[^>]*>)?\s*[*&]?\s+)?([A-Z][a-zA-Z0-9_]*::)?([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:const)?\s*(?:override)?\s*\{")?;
-
-        for (line_num, line) in content.lines().enumerate() {
-            let line_num = line_num + 1;
-
-            if let Some(caps) = namespace_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [namespace]", format!(":{}", line_num).dimmed(), name.cyan());
-                found = true;
-            }
-
-            if let Some(caps) = class_re.captures(line) {
-                let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [class]", format!(":{}", line_num).dimmed(), name.cyan());
-                found = true;
-            }
-
-            if let Some(caps) = func_re.captures(line) {
-                let class_prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                let name = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                if !class_prefix.is_empty() {
-                    println!("  {} {}::{} [method]", format!(":{}", line_num).dimmed(), class_prefix.trim_end_matches("::"), name);
-                } else {
-                    println!("  {} {} [function]", format!(":{}", line_num).dimmed(), name);
-                }
-                found = true;
-            }
-        }
+    if ext == "pm" || ext == "pl" || ext == "t" {
+        found = outline_via_treesitter(&content, crate::parsers::FileType::Perl, &[SymbolKind::Import])?;
+    } else if ext == "py" {
+        found = outline_via_treesitter(&content, crate::parsers::FileType::Python, &[SymbolKind::Import, SymbolKind::Property])?;
+    } else if ext == "go" {
+        found = outline_via_treesitter(&content, crate::parsers::FileType::Go, &[SymbolKind::Import])?;
+    } else if ext == "cpp" || ext == "cc" || ext == "c" || ext == "hpp" {
+        found = outline_via_treesitter(&content, crate::parsers::FileType::Cpp, &[SymbolKind::Import])?;
+    } else if ext == "h" {
+        // .h may be C++, C or ObjC — sniff content
+        let ft = if crate::parsers::detect_h_file_objc(&content) {
+            crate::parsers::FileType::ObjC
+        } else {
+            crate::parsers::FileType::Cpp
+        };
+        found = outline_via_treesitter(&content, ft, &[SymbolKind::Import])?;
+    } else if ext == "kt" || ext == "kts" {
+        found = outline_via_treesitter(&content, crate::parsers::FileType::Kotlin, &[SymbolKind::Import])?;
     } else if ext == "dart" {
         // Dart — delegate to tree-sitter parser for correct results
         found = outline_via_treesitter(&content, crate::parsers::FileType::Dart, &[SymbolKind::Import, SymbolKind::Property])?;
@@ -248,37 +140,11 @@ pub fn cmd_outline(root: &Path, file: &str) -> Result<()> {
         found = outline_via_treesitter(&content, crate::parsers::FileType::ObjC, &[SymbolKind::Import])?;
     } else if ext == "bsl" || ext == "os" {
         found = outline_via_treesitter(&content, crate::parsers::FileType::Bsl, &[])?;
+    } else if let Some(ft) = crate::parsers::FileType::from_extension(ext) {
+        // Any remaining language known to FileType::from_extension
+        found = outline_via_treesitter(&content, ft, &[SymbolKind::Import])?;
     } else {
-        // Kotlin (default fallback — existing regex logic)
-        let class_re = Regex::new(r"(?m)^\s*((?:public|private|protected|internal|abstract|open|final|sealed|data)?\s*)(class|interface|object|enum\s+class)\s+(\w+)")?;
-        let fun_re = Regex::new(r"(?m)^\s*((?:public|private|protected|internal|override|suspend)?\s*)fun\s+(?:<[^>]*>\s*)?(\w+)")?;
-        let prop_re = Regex::new(r"(?m)^\s*((?:public|private|protected|internal|override|const|lateinit)?\s*)(val|var)\s+(\w+)")?;
-
-        for (line_num, line) in content.lines().enumerate() {
-            let line_num = line_num + 1;
-
-            if let Some(caps) = class_re.captures(line) {
-                let kind = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                let name = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [{}]", format!(":{}", line_num).dimmed(), name.cyan(), kind);
-                found = true;
-            }
-
-            if let Some(caps) = fun_re.captures(line) {
-                let name = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                println!("  {} {} [function]", format!(":{}", line_num).dimmed(), name);
-                found = true;
-            }
-
-            if let Some(caps) = prop_re.captures(line) {
-                let kind = caps.get(2).map(|m| m.as_str()).unwrap_or("val");
-                let name = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-                if !name.is_empty() && name != "val" && name != "var" {
-                    println!("  {} {} [{}]", format!(":{}", line_num).dimmed(), name, kind);
-                    found = true;
-                }
-            }
-        }
+        println!("  Unsupported file type: .{}", ext);
     }
 
     if !found {

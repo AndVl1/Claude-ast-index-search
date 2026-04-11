@@ -546,7 +546,7 @@ impl FileType {
 }
 
 /// Detect whether a `.h` file contains Objective-C by looking for ObjC markers.
-fn detect_h_file_objc(content: &str) -> bool {
+pub fn detect_h_file_objc(content: &str) -> bool {
     for line in content.lines().take(50) {
         let trimmed = line.trim();
         if trimmed.starts_with("#import")

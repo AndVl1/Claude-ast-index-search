@@ -83,6 +83,23 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
         if verbose {
             eprintln!("[verbose] find_sub_projects: {} found in {:?}", subs.len(), t.elapsed());
         }
+
+        // When `include` is set explicitly, always honor it — route through the scoped
+        // path so the walker only touches the listed directories (not the whole root).
+        // Without this, a small project that sets include would fall through to the main
+        // branch and the include filter would be silently ignored.
+        if config_include.is_some() && !subs.is_empty() {
+            eprintln!(
+                "{}",
+                format!(
+                    "Honoring include config ({} paths) — walking only listed directories",
+                    subs.len()
+                ).yellow()
+            );
+            return cmd_rebuild_sub_projects(root, index_type, index_deps, no_ignore, verbose,
+                                            config_exclude.as_deref(), config_include.as_deref(), exclude_matcher.as_ref());
+        }
+
         if subs.len() >= 2 {
             if verbose { eprintln!("[verbose] counting files (quick_file_count, limit={})...", AUTO_SUB_PROJECTS_THRESHOLD); }
             let t = Instant::now();
@@ -244,10 +261,10 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
 
             let mut dep_count = 0;
             let mut trans_count = 0;
-            let any_has_deps = is_android || extra_roots.iter().any(|r| {
-                indexer::has_android_markers(std::path::Path::new(r))
-            });
-            if index_deps && any_has_deps {
+            // Run dep indexing whenever there are modules to process. This covers
+            // Android/Gradle, Maven, ya.make, and Python projects — previously this
+            // step was gated on Android detection, silently skipping other build systems.
+            if index_deps && module_count > 0 {
                 println!("{}", "Indexing module dependencies...".cyan());
                 if verbose { eprintln!("[verbose] indexing module deps..."); }
                 let t = Instant::now();
@@ -416,7 +433,7 @@ fn cmd_rebuild_sub_projects(
         format!("Found {} sub-projects in {}:", total, root.display()).cyan()
     );
     for (path, pt) in &sub_projects {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let name = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
         println!("  {} [{}]", name, pt.as_str());
     }
     println!();
@@ -444,7 +461,7 @@ fn cmd_rebuild_sub_projects(
     let mut fail_count = 0;
 
     for (i, (path, pt)) in sub_projects.iter().enumerate() {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let name = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
         println!(
             "{}",
             format!("[{}/{}] Indexing {} [{}]...", i + 1, total, name, pt.as_str()).cyan()

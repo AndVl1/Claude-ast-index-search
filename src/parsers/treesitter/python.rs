@@ -32,6 +32,8 @@ impl LanguageParser for PythonParser {
         };
 
         let idx_import_name = idx("import_name");
+        let idx_import_alias_original = idx("import_alias_original");
+        let idx_import_alias_name = idx("import_alias_name");
         let idx_import_from_module = idx("import_from_module");
         let idx_import_from_name = idx("import_from_name");
         let idx_import_from_module_alias = idx("import_from_module_alias");
@@ -64,6 +66,33 @@ impl LanguageParser for PythonParser {
                     signature: line_text(content, line).trim().to_string(),
                     parents: vec![],
                 });
+                continue;
+            }
+
+            // Import: import X as Y
+            if let Some(orig_cap) = find_capture(m, idx_import_alias_original) {
+                let original = node_text(content, &orig_cap.node);
+                let line = node_line(&orig_cap.node);
+                let sig = line_text(content, line).trim().to_string();
+
+                symbols.push(ParsedSymbol {
+                    name: original.to_string(),
+                    kind: SymbolKind::Import,
+                    line,
+                    signature: sig.clone(),
+                    parents: vec![],
+                });
+
+                if let Some(alias_cap) = find_capture(m, idx_import_alias_name) {
+                    let alias = node_text(content, &alias_cap.node);
+                    symbols.push(ParsedSymbol {
+                        name: alias.to_string(),
+                        kind: SymbolKind::Import,
+                        line,
+                        signature: sig,
+                        parents: vec![],
+                    });
+                }
                 continue;
             }
 
@@ -360,6 +389,16 @@ mod tests {
         let symbols = PYTHON_PARSER.parse_symbols(content).unwrap();
         assert!(symbols.iter().any(|s| s.name == "logging" && s.kind == SymbolKind::Import));
         assert!(symbols.iter().any(|s| s.name == "driver_referrals.common" && s.kind == SymbolKind::Import));
+    }
+
+    #[test]
+    fn test_parse_import_alias() {
+        let content = "import sqlalchemy as sa\nimport numpy as np\n";
+        let symbols = PYTHON_PARSER.parse_symbols(content).unwrap();
+        assert!(symbols.iter().any(|s| s.name == "sqlalchemy" && s.kind == SymbolKind::Import));
+        assert!(symbols.iter().any(|s| s.name == "sa" && s.kind == SymbolKind::Import));
+        assert!(symbols.iter().any(|s| s.name == "numpy" && s.kind == SymbolKind::Import));
+        assert!(symbols.iter().any(|s| s.name == "np" && s.kind == SymbolKind::Import));
     }
 
     #[test]
