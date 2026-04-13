@@ -459,6 +459,13 @@ fn cmd_rebuild_sub_projects(
     let mut total_files = 0;
     let mut success_count = 0;
     let mut fail_count = 0;
+    let mut all_module_files = Vec::new();
+    let mut all_xml_files = Vec::new();
+    let mut all_res_files = Vec::new();
+    let mut all_storyboard_files = Vec::new();
+    let mut all_xcassets_dirs = Vec::new();
+    let mut any_android = false;
+    let mut any_ios = false;
 
     for (i, (path, pt)) in sub_projects.iter().enumerate() {
         let name = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
@@ -467,10 +474,18 @@ fn cmd_rebuild_sub_projects(
             format!("[{}/{}] Indexing {} [{}]...", i + 1, total, name, pt.as_str()).cyan()
         );
 
+        if indexer::has_android_markers(path) { any_android = true; }
+        if indexer::has_ios_markers(path) { any_ios = true; }
+
         let t = Instant::now();
         match indexer::index_directory_scoped(&mut conn, root, path, true, no_ignore, None, extra_exclude) {
             Ok(walk) => {
                 total_files += walk.file_count;
+                all_module_files.extend(walk.module_files);
+                all_xml_files.extend(walk.xml_layout_files);
+                all_res_files.extend(walk.res_files);
+                all_storyboard_files.extend(walk.storyboard_files);
+                all_xcassets_dirs.extend(walk.xcassets_dirs);
                 if verbose {
                     eprintln!("[verbose] {} — {} files in {:?}", name, walk.file_count, t.elapsed());
                 }
@@ -488,12 +503,58 @@ fn cmd_rebuild_sub_projects(
         }
     }
 
+    // Index modules and dependencies from collected build files
+    let t = Instant::now();
+    let module_count = indexer::index_modules_from_files(&conn, root, &all_module_files)?;
+    if verbose { eprintln!("[verbose] index_modules: {} modules in {:?}", module_count, t.elapsed()); }
+
+    let mut dep_count = 0;
+    let mut trans_count = 0;
+    if module_count > 0 {
+        let t = Instant::now();
+        dep_count = indexer::index_module_dependencies(&mut conn, root, &all_module_files, verbose)?;
+        if verbose { eprintln!("[verbose] module_deps: {} in {:?}", dep_count, t.elapsed()); }
+        let t = Instant::now();
+        trans_count = indexer::build_transitive_deps(&mut conn, verbose)?;
+        if verbose { eprintln!("[verbose] transitive_deps: {} in {:?}", trans_count, t.elapsed()); }
+    }
+
+    // Android-specific: XML layouts and resources
+    let mut xml_count = 0;
+    let mut res_count = 0;
+    if any_android && !all_xml_files.is_empty() {
+        let t = Instant::now();
+        xml_count = indexer::index_xml_usages(&mut conn, root, &all_xml_files, verbose)?;
+        if verbose { eprintln!("[verbose] xml_usages: {} in {:?}", xml_count, t.elapsed()); }
+        let t = Instant::now();
+        let (rc, _) = indexer::index_resources(&mut conn, root, &all_res_files, verbose)?;
+        res_count = rc;
+        if verbose { eprintln!("[verbose] resources: {} in {:?}", res_count, t.elapsed()); }
+    }
+
+    // iOS-specific: storyboards and assets
+    let mut sb_count = 0;
+    let mut asset_count = 0;
+    if any_ios {
+        if !all_storyboard_files.is_empty() {
+            let t = Instant::now();
+            sb_count = indexer::index_storyboard_usages(&mut conn, root, &all_storyboard_files, verbose)?;
+            if verbose { eprintln!("[verbose] storyboard_usages: {} in {:?}", sb_count, t.elapsed()); }
+        }
+        if !all_xcassets_dirs.is_empty() {
+            let t = Instant::now();
+            let (ac, _) = indexer::index_ios_assets(&mut conn, root, &all_xcassets_dirs, verbose)?;
+            asset_count = ac;
+            if verbose { eprintln!("[verbose] ios_assets: {} in {:?}", asset_count, t.elapsed()); }
+        }
+    }
+
     println!();
     println!(
         "{}",
         format!(
-            "Done: {} sub-projects indexed ({} files total), {} failed",
-            success_count, total_files, fail_count
+            "Done: {} sub-projects indexed ({} files, {} modules, {} deps, {} transitive), {} failed",
+            success_count, total_files, module_count, dep_count, trans_count, fail_count
         ).green()
     );
     eprintln!("{}", format!("Total time: {:?}", start.elapsed()).dimmed());

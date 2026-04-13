@@ -336,9 +336,10 @@ pub fn detect_project_type(root: &Path) -> ProjectType {
             })
             .unwrap_or(false);
 
-    // C++ project detection (CMakeLists.txt without other markers)
+    // C++ project detection (CMakeLists.txt without other markers, or ya.make with C/C++ files)
     let has_cpp = root.join("CMakeLists.txt").exists()
-        || (root.join("Makefile").exists() && !has_perl);
+        || (root.join("Makefile").exists() && !has_perl)
+        || (root.join("ya.make").exists() && !has_gradle && !has_python && !has_go && !has_rust);
 
     // Dart/Flutter project detection
     let has_dart = root.join("pubspec.yaml").exists();

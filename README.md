@@ -424,6 +424,10 @@ exclude:
 
 ## Changelog
 
+### 3.37.1
+- **Sub-projects mode now indexes modules, deps, XML layouts, resources, storyboards, and assets** — previously `cmd_rebuild_sub_projects` only indexed source files, silently skipping module detection, dependency graph, Android XML/resources, and iOS storyboards/assets. Now all collected build files, layout files, and asset dirs from sub-project walks are processed after the main loop, matching the behavior of single-project rebuild
+- **`ya.make` recognized in project type detection** — directories with `ya.make` (and no other build system markers) are now detected as C++ projects instead of Unknown, improving type-specific behavior in monorepo sub-projects
+
 ### 3.37.0
 - **`outline` now uses tree-sitter for all languages** — Perl, Python, Go, C++, Kotlin previously used regex fallback with inaccurate results. Now routes through the same tree-sitter parsers used for indexing, with a generic fallback via `FileType::from_extension` covering ~30 languages. `outline` still works without a database, parsing the file on the fly (~5-50ms per file, e.g. 1806-line Kotlin file with 1298 symbols → 47ms)
 - **Python `import X as Y` now indexed** — `refs <module>` previously missed `import sqlalchemy as sa` while finding `from sqlalchemy import orm`. Tree-sitter query extended to emit both the original module name and the alias as `Import` symbols
