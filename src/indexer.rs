@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use crate::db;
 use crate::parsers::{self, ParsedRef, ParsedSymbol};
 
 /// Sorted module lookup for efficient longest-prefix matching.
@@ -953,7 +954,13 @@ fn write_batch_to_db(conn: &mut Connection, batch: Vec<ParsedFile>, total_count:
     Ok(())
 }
 
-/// Incremental update: only re-index changed/new files, delete removed files
+/// Incremental update: only re-index changed/new files, delete removed files.
+///
+/// Walks the primary root AND every extra_root registered in metadata. Each
+/// root's files are stored with paths relative to that root (matching how
+/// `rebuild` indexed them), so reconciliation against the DB works correctly
+/// for extra_roots — without this, extra-root files were seen as "missing"
+/// during the primary walk and deleted on every `update`.
 pub fn update_directory_incremental(conn: &mut Connection, root: &Path, progress: bool) -> Result<(usize, usize, usize)> {
     use ignore::WalkBuilder;
     use std::collections::HashMap;
@@ -976,64 +983,80 @@ pub fn update_directory_incremental(conn: &mut Connection, root: &Path, progress
         eprintln!("Loaded {} files from index", existing_files.len());
     }
 
-    // 2. Walk filesystem and collect files to update
-    let is_git = has_git_repo(root);
-    let arc_root = find_arc_root(root);
-    let mut builder = WalkBuilder::new(root);
-    builder
-        .hidden(true)
-        .git_ignore(is_git)
-        .filter_entry(|entry| !is_excluded_dir(entry));
-    if let Some(ref arc) = arc_root {
-        builder.add_custom_ignore_filename(".gitignore");
-        builder.add_custom_ignore_filename(".arcignore");
-        let root_gitignore = arc.join(".gitignore");
-        if root_gitignore.exists() {
-            builder.add_ignore(root_gitignore);
+    // 2. Build the list of roots to walk: primary + any extra_roots from the
+    //    DB metadata. Extra roots that no longer exist on disk are skipped so
+    //    their prior entries are treated as deleted.
+    let mut roots: Vec<PathBuf> = vec![root.to_path_buf()];
+    if let Ok(extra) = db::get_extra_roots(conn) {
+        for e in extra {
+            let p = PathBuf::from(&e);
+            if p.exists() {
+                roots.push(p);
+            } else if progress {
+                eprintln!("Skipping missing extra root: {}", e);
+            }
         }
     }
-    let walker = builder.build();
 
-    let current_files: Vec<PathBuf> = walker
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
+    // 3. Walk each root and categorize its files. Paths are relative to the
+    //    root they were discovered under, matching `index_directory_with_config`'s
+    //    storage scheme used during rebuild.
+    let mut files_to_parse: Vec<(PathBuf, PathBuf)> = Vec::new(); // (root, file_path)
+    let mut current_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for walk_root in &roots {
+        let is_git = has_git_repo(walk_root);
+        let arc_root = find_arc_root(walk_root);
+        let mut builder = WalkBuilder::new(walk_root);
+        builder
+            .hidden(true)
+            .git_ignore(is_git)
+            .filter_entry(|entry| !is_excluded_dir(entry));
+        if let Some(ref arc) = arc_root {
+            builder.add_custom_ignore_filename(".gitignore");
+            builder.add_custom_ignore_filename(".arcignore");
+            let root_gitignore = arc.join(".gitignore");
+            if root_gitignore.exists() {
+                builder.add_ignore(root_gitignore);
+            }
+        }
+        let walker = builder.build();
+
+        for entry in walker.filter_map(|e| e.ok()) {
+            let is_supported = entry
+                .path()
                 .extension()
                 .and_then(|ext| ext.to_str())
                 .map(parsers::is_supported_extension)
-                .unwrap_or(false)
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect();
+                .unwrap_or(false);
+            if !is_supported {
+                continue;
+            }
 
-    // 3. Categorize files: new, changed, unchanged
-    let mut files_to_parse: Vec<PathBuf> = Vec::new();
-    let mut current_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let file_path = entry.path().to_path_buf();
+            let rel_path = file_path
+                .strip_prefix(walk_root)
+                .unwrap_or(&file_path)
+                .to_string_lossy()
+                .to_string();
 
-    for file_path in current_files {
-        let rel_path = file_path
-            .strip_prefix(root)
-            .unwrap_or(&file_path)
-            .to_string_lossy()
-            .to_string();
+            let file_mtime = fs::metadata(&file_path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
 
-        let file_mtime = fs::metadata(&file_path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::SystemTime::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            let need_parse = match existing_files.get(&rel_path) {
+                Some((_, db_mtime)) => file_mtime > *db_mtime,
+                None => true,
+            };
 
-        let need_parse = if let Some((_, db_mtime)) = existing_files.get(&rel_path) {
-            file_mtime > *db_mtime
-        } else {
-            true
-        };
-
-        if need_parse {
-            files_to_parse.push(file_path);
+            if need_parse {
+                files_to_parse.push((walk_root.clone(), file_path));
+            }
+            current_paths.insert(rel_path);
         }
-        current_paths.insert(rel_path);
     }
 
     // 4. Find deleted files
@@ -1067,13 +1090,12 @@ pub fn update_directory_incremental(conn: &mut Connection, root: &Path, progress
     let updated_count = if !files_to_parse.is_empty() {
         let total_files = files_to_parse.len();
         let parsed_count = Arc::new(AtomicUsize::new(0));
-        let root_clone = root.to_path_buf();
         let parsed_count_clone = parsed_count.clone();
 
         let parsed_files: Vec<ParsedFile> = files_to_parse
             .par_iter()
-            .filter_map(|path| {
-                let result = parse_file(&root_clone, path).ok();
+            .filter_map(|(file_root, path)| {
+                let result = parse_file(file_root, path).ok();
                 let c = parsed_count_clone.fetch_add(1, Ordering::Relaxed) + 1;
                 if progress && c % 500 == 0 {
                     eprintln!("Parsed {} / {} changed files...", c, total_files);
