@@ -520,31 +520,25 @@ fn cmd_rebuild_sub_projects(
     }
 
     // Android-specific: XML layouts and resources
-    let mut xml_count = 0;
-    let mut res_count = 0;
     if any_android && !all_xml_files.is_empty() {
         let t = Instant::now();
-        xml_count = indexer::index_xml_usages(&mut conn, root, &all_xml_files, verbose)?;
+        let xml_count = indexer::index_xml_usages(&mut conn, root, &all_xml_files, verbose)?;
         if verbose { eprintln!("[verbose] xml_usages: {} in {:?}", xml_count, t.elapsed()); }
         let t = Instant::now();
-        let (rc, _) = indexer::index_resources(&mut conn, root, &all_res_files, verbose)?;
-        res_count = rc;
+        let (res_count, _) = indexer::index_resources(&mut conn, root, &all_res_files, verbose)?;
         if verbose { eprintln!("[verbose] resources: {} in {:?}", res_count, t.elapsed()); }
     }
 
     // iOS-specific: storyboards and assets
-    let mut sb_count = 0;
-    let mut asset_count = 0;
     if any_ios {
         if !all_storyboard_files.is_empty() {
             let t = Instant::now();
-            sb_count = indexer::index_storyboard_usages(&mut conn, root, &all_storyboard_files, verbose)?;
+            let sb_count = indexer::index_storyboard_usages(&mut conn, root, &all_storyboard_files, verbose)?;
             if verbose { eprintln!("[verbose] storyboard_usages: {} in {:?}", sb_count, t.elapsed()); }
         }
         if !all_xcassets_dirs.is_empty() {
             let t = Instant::now();
-            let (ac, _) = indexer::index_ios_assets(&mut conn, root, &all_xcassets_dirs, verbose)?;
-            asset_count = ac;
+            let (asset_count, _) = indexer::index_ios_assets(&mut conn, root, &all_xcassets_dirs, verbose)?;
             if verbose { eprintln!("[verbose] ios_assets: {} in {:?}", asset_count, t.elapsed()); }
         }
     }
