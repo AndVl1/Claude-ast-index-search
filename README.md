@@ -424,6 +424,9 @@ exclude:
 
 ## Changelog
 
+### 3.38.0
+- **Fix `update` wiping files under extra roots** — `update_directory_incremental` walked only the primary root, marking all extra-root files as deleted on every run. Now walks primary + every `extra_root` from metadata, computing relative paths per-root to match `rebuild`'s storage scheme. On a 111k-file project this was deleting 85k files per `update`
+
 ### 3.37.1
 - **Sub-projects mode now indexes modules, deps, XML layouts, resources, storyboards, and assets** — previously `cmd_rebuild_sub_projects` only indexed source files, silently skipping module detection, dependency graph, Android XML/resources, and iOS storyboards/assets. Now all collected build files, layout files, and asset dirs from sub-project walks are processed after the main loop, matching the behavior of single-project rebuild
 - **`ya.make` recognized in project type detection** — directories with `ya.make` (and no other build system markers) are now detected as C++ projects instead of Unknown, improving type-specific behavior in monorepo sub-projects
