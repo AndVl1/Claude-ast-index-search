@@ -10,7 +10,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -21,8 +20,6 @@ use crate::db;
 
 /// Find storyboard usages of a class
 pub fn cmd_storyboard_usages(root: &Path, class_name: &str, module: Option<&str>) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -118,7 +115,6 @@ pub fn cmd_storyboard_usages(root: &Path, class_name: &str, module: Option<&str>
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -130,8 +126,6 @@ pub fn cmd_asset_usages(
     asset_type: Option<&str>,
     unused: bool,
 ) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -270,7 +264,6 @@ pub fn cmd_asset_usages(
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -278,8 +271,6 @@ pub fn cmd_asset_usages(
 /// Finds any `@Wrapper var/let` property, not limited to a fixed list of wrappers.
 pub fn cmd_swiftui(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
     use crate::parsers::treesitter::swift::find_property_wrappers;
-
-    let start = Instant::now();
 
     // Use grep to find candidate files (fast), then tree-sitter for precise extraction
     let mut swift_files: std::collections::HashSet<std::path::PathBuf> =
@@ -350,7 +341,6 @@ pub fn cmd_swiftui(root: &Path, query: Option<&str>, limit: usize) -> Result<()>
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -358,8 +348,6 @@ pub fn cmd_swiftui(root: &Path, query: Option<&str>, limit: usize) -> Result<()>
 /// Handles multi-line signatures natively.
 pub fn cmd_async_funcs(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
     use crate::parsers::treesitter::swift::find_async_funcs;
-
-    let start = Instant::now();
 
     let mut results: Vec<(String, String, usize)> = vec![];
 
@@ -400,14 +388,11 @@ pub fn cmd_async_funcs(root: &Path, query: Option<&str>, limit: usize) -> Result
         println!("  {}: {}:{}", func_name.cyan(), path, line_num);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find Combine publishers (PassthroughSubject, CurrentValueSubject, AnyPublisher)
 pub fn cmd_publishers(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     // Search for Combine publishers: PassthroughSubject, CurrentValueSubject, AnyPublisher, Published
     let pattern = r"(PassthroughSubject|CurrentValueSubject|AnyPublisher|@Published)\s*[<(]";
 
@@ -452,14 +437,11 @@ pub fn cmd_publishers(root: &Path, query: Option<&str>, limit: usize) -> Result<
         println!("    {}", content.dimmed());
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find @MainActor usages
 pub fn cmd_main_actor(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     // Search for @MainActor
     let pattern = r"@MainActor";
 
@@ -491,6 +473,5 @@ pub fn cmd_main_actor(root: &Path, query: Option<&str>, limit: usize) -> Result<
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }

@@ -882,12 +882,8 @@ pub fn index_directory_scoped(conn: &mut Connection, root: &Path, walk_dir: &Pat
         if verbose { eprintln!("[verbose] chunk {}/{}: written in {:?}", chunk_idx + 1, total_chunks, write_start.elapsed()); }
 
         if progress {
-            eprintln!("Written {} / {} files to DB...", total_count, total_files);
+            eprintln!("Written {} / {} files to DB", total_count, total_files);
         }
-    }
-
-    if progress {
-        eprintln!("Written {} / {} files to DB", total_count, total_files);
     }
 
     Ok(WalkResult {
