@@ -90,6 +90,18 @@ harness = false
 name = "pipeline_bench"
 harness = false
 
+[[bench]]
+name = "parser"
+harness = false
+
+[[bench]]
+name = "db_query"
+harness = false
+
+[[bench]]
+name = "index_build"
+harness = false
+
 [profile.release]
 lto = true
 codegen-units = 1
