@@ -80,3 +80,24 @@ bump commit. Don't let that happen.
 
 The user is in the loop. When work is done, report what changed and let
 them say "commit it" — then do the commit. Do not pre-emptively commit.
+
+## Push right after committing
+
+Once the user has approved the commit, push it in the same turn — don't
+leave local commits dangling, don't wait for a separate "push" prompt. A
+local-only commit is work the user can't see on their other machines,
+can't share, and can't recover if the laptop fries.
+
+```bash
+git push origin <branch>
+```
+
+Exceptions that still need an explicit go-ahead:
+
+- Anything involving `--force` / `-f`, even on a personal branch.
+- Pushing a tag that alters a published release (don't — cut a new patch
+  instead; see `release.md`).
+- Pushing to a protected branch you don't normally push to.
+
+If the push fails (rejected non-fast-forward, hook rejection), stop and
+report; don't retry with `--force` to "fix" it.
