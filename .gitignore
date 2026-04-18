@@ -11,6 +11,11 @@
 !/.claude/rules/testing.md
 !/.claude/rules/release.md
 !/.claude/rules/verify.md
+!/.claude/agents/
+/.claude/agents/*
+!/.claude/agents/bug-fix.md
+!/.claude/agents/research.md
+!/.claude/agents/review.md
 dist/
 mobile-tools/
 .mcp.json
