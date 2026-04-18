@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -190,8 +189,6 @@ pub fn cmd_map(
     limit: usize,
     format: &str,
 ) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!("{}", "Index not found. Run 'ast-index rebuild' first.".red());
         return Ok(());
@@ -209,7 +206,6 @@ pub fn cmd_map(
         cmd_map_summary(&conn, &project_type, &stats, limit, depth, format)?;
     }
 
-    eprintln!("{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -671,8 +667,6 @@ const ARCH_PATTERNS: &[(&[&str], &str)] = &[
 ];
 
 pub fn cmd_conventions(root: &Path, format: &str) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!("{}", "Index not found. Run 'ast-index rebuild' first.".red());
         return Ok(());
@@ -814,6 +808,5 @@ pub fn cmd_conventions(root: &Path, format: &str) -> Result<()> {
         println!();
     }
 
-    eprintln!("{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }

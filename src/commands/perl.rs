@@ -8,7 +8,6 @@
 //! - perl_imports: Find use/require statements
 
 use std::path::Path;
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -17,8 +16,6 @@ use super::{search_files_limited, relative_path};
 
 /// Find Perl @EXPORT and @EXPORT_OK definitions
 pub fn cmd_perl_exports(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     // Search for @EXPORT and @EXPORT_OK definitions
     let pattern = r"our\s+@EXPORT|our\s+@EXPORT_OK|@EXPORT\s*=|@EXPORT_OK\s*=";
 
@@ -46,14 +43,11 @@ pub fn cmd_perl_exports(root: &Path, query: Option<&str>, limit: usize) -> Resul
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find Perl subroutine definitions
 pub fn cmd_perl_subs(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     // Search for sub definitions
     let pattern = r"^\s*sub\s+\w+";
 
@@ -81,14 +75,11 @@ pub fn cmd_perl_subs(root: &Path, query: Option<&str>, limit: usize) -> Result<(
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find POD documentation sections
 pub fn cmd_perl_pod(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     // Search for POD documentation sections
     // =head1, =head2, =head3, =head4, =item, =over, =back, =pod, =cut, =begin, =end
     let pattern = r"^=(head[1-4]|item|over|back|pod|cut|begin|end|for)\b";
@@ -117,14 +108,11 @@ pub fn cmd_perl_pod(root: &Path, query: Option<&str>, limit: usize) -> Result<()
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find Perl test assertions (Test::More, Test::Simple)
 pub fn cmd_perl_tests(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     // Search for Test::More and Test::Simple assertions
     // ok(), is(), isnt(), like(), unlike(), cmp_ok(), is_deeply(), diag(), pass(), fail()
     // subtest, plan, done_testing, SKIP, TODO
@@ -154,14 +142,11 @@ pub fn cmd_perl_tests(root: &Path, query: Option<&str>, limit: usize) -> Result<
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find Perl use/require statements
 pub fn cmd_perl_imports(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     // Search for use/require statements
     let pattern = r"^\s*(use|require)\s+[A-Za-z]";
 
@@ -202,6 +187,5 @@ pub fn cmd_perl_imports(root: &Path, query: Option<&str>, limit: usize) -> Resul
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }

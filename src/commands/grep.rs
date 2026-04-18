@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -103,7 +102,6 @@ fn build_def_skip_pattern(function_name: &str) -> Regex {
 
 /// Find TODO/FIXME/HACK comments
 pub fn cmd_todo(root: &Path, pattern: &str, limit: usize) -> Result<()> {
-    let start = Instant::now();
     let search_pattern = format!(r"//.*({pattern})|#.*({pattern})");
 
     let mut todos: HashMap<String, Vec<(String, usize, String)>> = HashMap::new();
@@ -150,13 +148,11 @@ pub fn cmd_todo(root: &Path, pattern: &str, limit: usize) -> Result<()> {
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find function callers
 pub fn cmd_callers(root: &Path, function_name: &str, limit: usize) -> Result<()> {
-    let start = Instant::now();
     let pattern = build_caller_pattern(function_name);
     let def_pattern = build_def_skip_pattern(function_name);
 
@@ -183,14 +179,11 @@ pub fn cmd_callers(root: &Path, function_name: &str, limit: usize) -> Result<()>
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Show call hierarchy (callers tree) for a function
 pub fn cmd_call_tree(root: &Path, function_name: &str, max_depth: usize, limit_per_level: usize) -> Result<()> {
-    let start = Instant::now();
-
     println!("{}", format!("Call tree for '{}':", function_name).bold());
     println!("  {}", function_name.cyan());
 
@@ -199,7 +192,6 @@ pub fn cmd_call_tree(root: &Path, function_name: &str, max_depth: usize, limit_p
 
     build_call_tree(root, function_name, 1, max_depth, limit_per_level, &mut visited)?;
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -313,8 +305,6 @@ fn find_containing_function(lines: &[&str], target_line: usize, func_def_re: &Re
 
 /// Find Dagger @Provides/@Binds for a type
 pub fn cmd_provides(root: &Path, type_name: &str, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     let mut results: Vec<(String, usize, String)> = vec![];
 
     // Walk files and search with context
@@ -393,13 +383,11 @@ pub fn cmd_provides(root: &Path, type_name: &str, limit: usize) -> Result<()> {
         println!("    {}", truncated);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find suspend functions
 pub fn cmd_suspend(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
     let pattern = r"suspend\s+fun\s+\w+";
     let func_regex = Regex::new(r"suspend\s+fun\s+(\w+)")?;
 
@@ -427,13 +415,11 @@ pub fn cmd_suspend(root: &Path, query: Option<&str>, limit: usize) -> Result<()>
         println!("  {}: {}:{}", func_name.cyan(), path, line_num);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find @Composable functions
 pub fn cmd_composables(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
     let func_regex = Regex::new(r"fun\s+(\w+)\s*\(")?;
 
     // Phase 1: find all .kt files containing @Composable
@@ -492,13 +478,11 @@ pub fn cmd_composables(root: &Path, query: Option<&str>, limit: usize) -> Result
         println!("  {}: {}:{}", func_name.cyan(), path, line_num);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find @Deprecated annotations
 pub fn cmd_deprecated(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
     // Kotlin/Java/C#: @Deprecated/@Obsolete, Swift: @available(*, deprecated)
     // Python: @deprecated, Perl: DEPRECATED, Rust: #[deprecated], Go: // Deprecated:
     // JS/TS: @deprecated (JSDoc), PHP: @deprecated (PHPDoc), C++: [[deprecated]]
@@ -525,13 +509,11 @@ pub fn cmd_deprecated(root: &Path, query: Option<&str>, limit: usize) -> Result<
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find @Suppress annotations
 pub fn cmd_suppress(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
     let pattern = r"@Suppress";
 
     let mut items: Vec<(String, usize, String)> = vec![];
@@ -555,13 +537,11 @@ pub fn cmd_suppress(root: &Path, query: Option<&str>, limit: usize) -> Result<()
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find @Inject/@Autowired points for a type
 pub fn cmd_inject(root: &Path, type_name: &str, limit: usize) -> Result<()> {
-    let start = Instant::now();
     let pattern = r"@Inject|@Autowired";
 
     let mut items: Vec<(String, usize, String)> = vec![];
@@ -590,13 +570,11 @@ pub fn cmd_inject(root: &Path, type_name: &str, limit: usize) -> Result<()> {
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find uses of specific annotation
 pub fn cmd_annotations(root: &Path, annotation: &str, limit: usize) -> Result<()> {
-    let start = Instant::now();
     // Normalize annotation (add @ if missing for Java/Kotlin/Swift/ObjC)
     // For Perl, attributes are like :lvalue, :method
     let search_annotation = if annotation.starts_with('@') || annotation.starts_with(':') {
@@ -621,13 +599,11 @@ pub fn cmd_annotations(root: &Path, annotation: &str, limit: usize) -> Result<()
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find deeplink definitions
 pub fn cmd_deeplinks(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
     // Search for specific deeplink patterns (NOT generic :// URLs)
     // Android: @DeepLink, DeepLinkHandler, @AppLink, NavDeepLink, intent-filter with android:scheme
     // iOS: openURL, application(_:open:, handleOpen, CFBundleURLSchemes, UniversalLink
@@ -654,13 +630,11 @@ pub fn cmd_deeplinks(root: &Path, query: Option<&str>, limit: usize) -> Result<(
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find extension functions/types
 pub fn cmd_extensions(root: &Path, receiver_type: &str, limit: usize) -> Result<()> {
-    let start = Instant::now();
     // Kotlin: fun ReceiverType.functionName
     // Swift: extension ReceiverType
     let kotlin_pattern = format!(r"fun\s+{}\.(\w+)", regex::escape(receiver_type));
@@ -694,13 +668,11 @@ pub fn cmd_extensions(root: &Path, receiver_type: &str, limit: usize) -> Result<
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find Flow declarations
 pub fn cmd_flows(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
     let pattern = r"(StateFlow|SharedFlow|MutableStateFlow|MutableSharedFlow|Flow<)";
     let flow_regex = Regex::new(r"(StateFlow|SharedFlow|MutableStateFlow|MutableSharedFlow|Flow)<")?;
 
@@ -729,13 +701,11 @@ pub fn cmd_flows(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
         println!("    {}", content);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find @Preview functions
 pub fn cmd_previews(root: &Path, query: Option<&str>, limit: usize) -> Result<()> {
-    let start = Instant::now();
     let func_regex = Regex::new(r"fun\s+(\w+)\s*\(")?;
 
     // Phase 1: find all .kt files containing @Preview
@@ -794,7 +764,6 @@ pub fn cmd_previews(root: &Path, query: Option<&str>, limit: usize) -> Result<()
         println!("  {}: {}:{}", func_name.cyan(), path, line_num);
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 

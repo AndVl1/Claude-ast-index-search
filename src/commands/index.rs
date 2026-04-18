@@ -9,7 +9,6 @@
 //! - usages: Find symbol usages (indexed or grep-based)
 
 use std::path::Path;
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -21,8 +20,6 @@ use super::{search_files, relative_path};
 
 /// Full-text search across files, symbols, and file contents
 pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
-    let total_start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -48,11 +45,6 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
     let mut seen_refs = std::collections::HashSet::new();
     let mut seen_content = std::collections::HashSet::new();
 
-    let files_start = Instant::now();
-    let symbols_start; // declared below
-    let refs_start;
-    let content_start;
-
     // 1. Search in file paths (index)
     for term in &terms {
         let mut term_files = db::find_files(&conn, term, per_term_limit)?;
@@ -65,10 +57,8 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
             }
         }
     }
-    let files_time = files_start.elapsed();
 
     // 2. Search in symbols using FTS or fuzzy (index)
-    symbols_start = Instant::now();
     let fetch_limit = per_term_limit * if kind_filter.is_some() { 5 } else { 1 };
     for term in &terms {
         let raw = if fuzzy {
@@ -89,10 +79,8 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
         }
     }
     symbols.truncate(limit);
-    let symbols_time = symbols_start.elapsed();
 
     // 3. Search in references (imports and usages from index)
-    refs_start = Instant::now();
     for term in &terms {
         let term_refs = db::search_refs(&conn, term, per_term_limit)?;
         for (name, count) in term_refs {
@@ -101,10 +89,8 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
             }
         }
     }
-    let refs_time = refs_start.elapsed();
 
     // 4. Search in file contents (grep)
-    content_start = Instant::now();
     let pattern = if terms.len() > 1 {
         terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|")
     } else {
@@ -129,7 +115,6 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
             content_matches.push((rel_path, line_num, content));
         }
     })?;
-    let content_time = content_start.elapsed();
 
     if format == "json" {
         let result = serde_json::json!({
@@ -188,18 +173,11 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
         println!("  No results found.");
     }
 
-    // Timing breakdown
-    eprintln!("\n{}", format!(
-        "Time: {:?} (files: {:?}, symbols: {:?}, refs: {:?}, content: {:?})",
-        total_start.elapsed(), files_time, symbols_time, refs_time, content_time
-    ).dimmed());
     Ok(())
 }
 
 /// Find symbol by name or glob pattern
 pub fn cmd_symbol(root: &Path, name: Option<&str>, pattern: Option<&str>, kind: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -250,14 +228,11 @@ pub fn cmd_symbol(root: &Path, name: Option<&str>, pattern: Option<&str>, kind: 
         println!("  No symbols found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find class by name or glob pattern (classes, interfaces, objects, enums)
 pub fn cmd_class(root: &Path, name: Option<&str>, pattern: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -305,14 +280,11 @@ pub fn cmd_class(root: &Path, name: Option<&str>, pattern: Option<&str>, limit: 
         println!("  No classes found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find implementations of interface/class
 pub fn cmd_implementations(root: &Path, parent: &str, limit: usize, format: &str, scope: &SearchScope) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -342,14 +314,11 @@ pub fn cmd_implementations(root: &Path, parent: &str, limit: usize, format: &str
         println!("  No implementations found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Show cross-references: definitions, imports, usages
 pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -405,14 +374,11 @@ pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str) -> Result
         println!("  No references found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Show class hierarchy (parents and children)
 pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -478,14 +444,11 @@ pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()>
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Find symbol usages (indexed or grep-based)
 pub fn cmd_usages(root: &Path, symbol: &str, limit: usize, format: &str, scope: &SearchScope) -> Result<()> {
-    let start = Instant::now();
-
     // Try to use index first
     let db_path = db::get_db_path(root)?;
     if db_path.exists() {
@@ -517,7 +480,6 @@ pub fn cmd_usages(root: &Path, symbol: &str, limit: usize, format: &str, scope: 
                 println!("  No usages found in index.");
             }
 
-            eprintln!("\n{}", format!("Time: {:?} (indexed)", start.elapsed()).dimmed());
             return Ok(());
         }
     }
@@ -568,6 +530,5 @@ pub fn cmd_usages(root: &Path, symbol: &str, limit: usize, format: &str, scope: 
         println!("  No usages found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?} (grep)", start.elapsed()).dimmed());
     Ok(())
 }

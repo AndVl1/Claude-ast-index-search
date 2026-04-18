@@ -3,7 +3,6 @@
 //! - unused-symbols: Find potentially unused public symbols
 
 use std::path::Path;
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -19,8 +18,6 @@ pub fn cmd_unused_symbols(
     limit: usize,
     format: &str,
 ) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -168,9 +165,5 @@ pub fn cmd_unused_symbols(
         println!("  No unused symbols found.");
     }
 
-    eprintln!(
-        "\n{}",
-        format!("Time: {:?}", start.elapsed()).dimmed()
-    );
     Ok(())
 }

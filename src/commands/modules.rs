@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -21,8 +20,6 @@ use crate::indexer;
 
 /// Find modules by pattern
 pub fn cmd_module(root: &Path, pattern: &str, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -51,14 +48,11 @@ pub fn cmd_module(root: &Path, pattern: &str, limit: usize) -> Result<()> {
         println!("  No modules found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Show module dependencies
 pub fn cmd_deps(root: &Path, module: &str) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -117,14 +111,11 @@ pub fn cmd_deps(root: &Path, module: &str) -> Result<()> {
         println!("  No dependencies found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Show modules that depend on a module
 pub fn cmd_dependents(root: &Path, module: &str) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -183,7 +174,6 @@ pub fn cmd_dependents(root: &Path, module: &str) -> Result<()> {
         println!("  No dependents found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -196,8 +186,6 @@ pub fn cmd_unused_deps(
     check_xml: bool,
     check_resources: bool,
 ) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!("{}", "Index not found. Run 'ast-index rebuild' first.".red());
         return Ok(());
@@ -528,7 +516,6 @@ pub fn cmd_unused_deps(
         println!("  - Exported (api): {}", exported.len());
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 

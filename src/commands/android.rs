@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -16,8 +15,6 @@ use crate::db;
 
 /// Find XML usages of a class (layouts, views)
 pub fn cmd_xml_usages(root: &Path, class_name: &str, module_filter: Option<&str>) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!("{}", "Index not found. Run 'ast-index rebuild' first.".red());
         return Ok(());
@@ -85,7 +82,6 @@ pub fn cmd_xml_usages(root: &Path, class_name: &str, module_filter: Option<&str>
         println!("  No XML usages found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -97,8 +93,6 @@ pub fn cmd_resource_usages(
     type_filter: Option<&str>,
     show_unused: bool,
 ) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!("{}", "Index not found. Run 'ast-index rebuild' first.".red());
         return Ok(());
@@ -236,7 +230,6 @@ pub fn cmd_resource_usages(
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 

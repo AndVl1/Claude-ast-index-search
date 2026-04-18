@@ -121,8 +121,6 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
         }
     }
 
-    let start = Instant::now();
-
     // Acquire exclusive lock to prevent concurrent rebuilds
     if verbose {
         eprintln!("[verbose] acquiring rebuild lock...");
@@ -394,7 +392,6 @@ pub fn cmd_rebuild(root: &Path, index_type: &str, index_deps: bool, no_ignore: b
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -411,8 +408,6 @@ fn cmd_rebuild_sub_projects(
     config_include: Option<&[String]>,
     exclude_matcher: Option<&ignore::gitignore::Gitignore>,
 ) -> Result<()> {
-    let start = Instant::now();
-
     // Acquire exclusive lock to prevent concurrent rebuilds
     if verbose { eprintln!("[verbose] sub-projects: acquiring lock..."); }
     let t = Instant::now();
@@ -551,14 +546,11 @@ fn cmd_rebuild_sub_projects(
             success_count, total_files, module_count, dep_count, trans_count, fail_count
         ).green()
     );
-    eprintln!("{}", format!("Total time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Incrementally update the index
 pub fn cmd_update(root: &Path) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -587,7 +579,6 @@ pub fn cmd_update(root: &Path) -> Result<()> {
         );
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 

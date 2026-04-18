@@ -8,7 +8,6 @@
 //! - changed: Show changed symbols in git diff
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use anyhow::Result;
 use colored::Colorize;
@@ -36,8 +35,6 @@ fn outline_via_treesitter(content: &str, file_type: crate::parsers::FileType, sk
 
 /// Find files by pattern
 pub fn cmd_file(root: &Path, pattern: &str, exact: bool, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -61,14 +58,11 @@ pub fn cmd_file(root: &Path, pattern: &str, exact: bool, limit: usize) -> Result
         println!("  No files found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Show file symbols outline
 pub fn cmd_outline(root: &Path, file: &str) -> Result<()> {
-    let start = Instant::now();
-
     // Find the file
     let file_path = if file.starts_with('/') {
         PathBuf::from(file)
@@ -151,14 +145,11 @@ pub fn cmd_outline(root: &Path, file: &str) -> Result<()> {
         println!("  No symbols found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Show file imports
 pub fn cmd_imports(root: &Path, file: &str) -> Result<()> {
-    let start = Instant::now();
-
     let file_path = if file.starts_with('/') {
         PathBuf::from(file)
     } else {
@@ -262,14 +253,11 @@ pub fn cmd_imports(root: &Path, file: &str) -> Result<()> {
         println!("\n  Total: {} imports", imports.len());
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
 /// Show module public API
 pub fn cmd_api(root: &Path, module_path: &str, limit: usize) -> Result<()> {
-    let start = Instant::now();
-
     let mut module_dir = root.join(module_path);
 
     // If path not found, try converting dots to slashes (module name → path)
@@ -332,7 +320,6 @@ pub fn cmd_api(root: &Path, module_path: &str, limit: usize) -> Result<()> {
         println!("  No public API found.");
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
 
@@ -426,8 +413,6 @@ fn normalize_base_for_vcs(vcs: &str, base: &str) -> String {
 
 /// Show changed symbols in git/arc diff
 pub fn cmd_changed(root: &Path, base: &str) -> Result<()> {
-    let start = Instant::now();
-
     let vcs = detect_vcs(root);
     let base = normalize_base_for_vcs(vcs, base);
 
@@ -500,6 +485,5 @@ pub fn cmd_changed(root: &Path, base: &str) -> Result<()> {
         }
     }
 
-    eprintln!("\n{}", format!("Time: {:?}", start.elapsed()).dimmed());
     Ok(())
 }
