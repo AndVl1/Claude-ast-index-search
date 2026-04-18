@@ -103,6 +103,40 @@ ast-index install-claude-plugin
 
 Restart Claude Code to activate. Update: `brew upgrade ast-index && claude plugin update ast-index`. Uninstall: `claude plugin uninstall ast-index`.
 
+See [`examples/.claude/rules/ast-index.md`](examples/.claude/rules/ast-index.md) for a template rules file that teaches the agent to prefer ast-index over grep, outline before reading large files, and pass the same instructions to subagents. Adapt before dropping into your project's `.claude/rules/`.
+
+### MCP server (Cursor, Codex, Cline, Continue, OpenCode, Windsurf, …)
+
+An MCP server that exposes ast-index tools to any MCP-compatible agent. Each
+tool call spawns `ast-index <subcommand>`, parses the output, and returns a
+compact TOON-inspired text blob (≈2-3× fewer tokens than pretty JSON). Agents
+can opt into raw JSON per-call via `format: "json"` when they need structured
+parsing.
+
+Build:
+
+```bash
+cargo build --release -p ast-index-mcp
+# Binary: target/release/ast-index-mcp
+```
+
+Exposed tools (10):
+
+| Tool | Purpose |
+|------|---------|
+| `search` | Universal search across files, symbols, imports, content |
+| `outline` | Structural outline of a file (call before reading >500-line files) |
+| `usages` | Every usage of a symbol (file:line + context) |
+| `callers` | Direct callers of a function |
+| `implementations` | Types that implement/extend an interface or parent |
+| `refs` | Definitions + imports + usages in one shot |
+| `find_file` | Locate files by name pattern |
+| `stats` | Project type, counts, DB size, extra roots |
+| `rebuild` | Full reindex (slow — prefer `update`) |
+| `update` | Incremental reindex (fast) |
+
+Setup instructions per agent: [`docs/mcp-setup.md`](docs/mcp-setup.md).
+
 ### Gemini CLI
 
 ```bash
@@ -423,6 +457,9 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.38.1
+- **Fix ambiguous paths in search output under extra roots** — when `add-root` pointed outside the primary project, `search`/`symbol`/`class`/`implementations`/`refs`/`hierarchy`/`usages` printed only the stored relative path (e.g. `src/main/java/.../BClass.java`) with no indication of which root owned it. Agents defaulted to the primary project and failed to open the file. Now, when any extra root is configured, index-backed results are resolved to absolute paths by probing each root on disk (primary first, then extras). Single-root output is unchanged
 
 ### 3.38.0
 - **Fix `update` wiping files under extra roots** — `update_directory_incremental` walked only the primary root, marking all extra-root files as deleted on every run. Now walks primary + every `extra_root` from metadata, computing relative paths per-root to match `rebuild`'s storage scheme. On a 111k-file project this was deleting 85k files per `update`

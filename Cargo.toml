@@ -1,3 +1,12 @@
+[workspace]
+members = [".", "crates/ast-index-mcp"]
+# Only build the root `ast-index` binary with `cargo build` by default.
+# MCP crate is opt-in: `cargo build -p ast-index-mcp`.
+# This keeps existing release pipelines (release.yml, Arcadia IX, homebrew,
+# npm, ya tool upload) unchanged — they all run plain `cargo build --release`
+# and produce a single `ast-index` binary as before.
+default-members = ["."]
+
 [package]
 name = "ast-index"
 version = "3.38.0"
