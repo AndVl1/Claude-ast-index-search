@@ -261,7 +261,11 @@ enum Commands {
         paths: Vec<String>,
     },
     /// Update index (incremental)
-    Update,
+    Update {
+        /// Verbose logging with timing
+        #[arg(long, short)]
+        verbose: bool,
+    },
     /// Restore index from a .db file
     Restore {
         /// Path to the .db file to restore
@@ -698,7 +702,7 @@ fn main() -> Result<()> {
             let pt_override = project_type.as_ref().and_then(|s| indexer::ProjectType::from_str(s));
             commands::management::cmd_rebuild(&root, &r#type, !no_deps, no_ignore, sub_projects, pt_override, verbose, &include, &exclude, &paths)
         }
-        Commands::Update => commands::management::cmd_update(&root),
+        Commands::Update { verbose } => commands::management::cmd_update(&root, verbose),
         Commands::Restore { path } => commands::management::cmd_restore(&root, &path),
         Commands::Stats => commands::management::cmd_stats(&root, format),
         // Index commands
