@@ -16,7 +16,7 @@ use regex::Regex;
 use rusqlite::{params, Connection};
 
 use crate::db::{self, SearchScope};
-use super::{search_files, relative_path};
+use super::{search_files, relative_path, PathResolver};
 
 /// Full-text search across files, symbols, and file contents
 pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: usize, format: &str, scope: &SearchScope, fuzzy: bool) -> Result<()> {
@@ -116,6 +116,17 @@ pub fn cmd_search(root: &Path, query: &str, kind_filter: Option<&str>, limit: us
         }
     })?;
 
+    let resolver = PathResolver::from_conn(root, &conn);
+    for p in &mut files {
+        *p = resolver.resolve(p);
+    }
+    for s in &mut symbols {
+        s.path = resolver.resolve(&s.path);
+    }
+    for m in &mut content_matches {
+        m.0 = resolver.resolve(&m.0);
+    }
+
     if format == "json" {
         let result = serde_json::json!({
             "files": files,
@@ -192,7 +203,7 @@ pub fn cmd_symbol(root: &Path, name: Option<&str>, pattern: Option<&str>, kind: 
     }
 
     let conn = db::open_db(root)?;
-    let symbols = if let Some(pat) = pattern {
+    let mut symbols = if let Some(pat) = pattern {
         let like_pattern = db::glob_to_like(pat);
         db::find_symbols_by_pattern(&conn, &like_pattern, kind, limit, scope)?
     } else {
@@ -203,6 +214,11 @@ pub fn cmd_symbol(root: &Path, name: Option<&str>, pattern: Option<&str>, kind: 
             db::find_symbols_by_name_scoped(&conn, name, kind, limit, scope)?
         }
     };
+
+    let resolver = PathResolver::from_conn(root, &conn);
+    for s in &mut symbols {
+        s.path = resolver.resolve(&s.path);
+    }
 
     if format == "json" {
         println!("{}", serde_json::to_string_pretty(&symbols)?);
@@ -248,7 +264,7 @@ pub fn cmd_class(root: &Path, name: Option<&str>, pattern: Option<&str>, limit: 
 
     let conn = db::open_db(root)?;
 
-    let results = if let Some(pat) = pattern {
+    let mut results: Vec<db::SearchResult> = if let Some(pat) = pattern {
         let like_pattern = db::glob_to_like(pat);
         db::find_class_like_pattern(&conn, &like_pattern, limit, scope)?
     } else {
@@ -263,6 +279,11 @@ pub fn cmd_class(root: &Path, name: Option<&str>, pattern: Option<&str>, limit: 
             db::find_class_like_scoped(&conn, name, limit, scope)?
         }
     };
+
+    let resolver = PathResolver::from_conn(root, &conn);
+    for s in &mut results {
+        s.path = resolver.resolve(&s.path);
+    }
 
     if format == "json" {
         println!("{}", serde_json::to_string_pretty(&results)?);
@@ -294,7 +315,12 @@ pub fn cmd_implementations(root: &Path, parent: &str, limit: usize, format: &str
     }
 
     let conn = db::open_db(root)?;
-    let impls = db::find_implementations_scoped(&conn, parent, limit, scope)?;
+    let mut impls = db::find_implementations_scoped(&conn, parent, limit, scope)?;
+
+    let resolver = PathResolver::from_conn(root, &conn);
+    for s in &mut impls {
+        s.path = resolver.resolve(&s.path);
+    }
 
     if format == "json" {
         println!("{}", serde_json::to_string_pretty(&impls)?);
@@ -328,7 +354,18 @@ pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str) -> Result
     }
 
     let conn = db::open_db(root)?;
-    let (definitions, imports, usages) = db::find_cross_references(&conn, symbol, limit)?;
+    let (mut definitions, mut imports, mut usages) = db::find_cross_references(&conn, symbol, limit)?;
+
+    let resolver = PathResolver::from_conn(root, &conn);
+    for s in &mut definitions {
+        s.path = resolver.resolve(&s.path);
+    }
+    for s in &mut imports {
+        s.path = resolver.resolve(&s.path);
+    }
+    for r in &mut usages {
+        r.path = resolver.resolve(&r.path);
+    }
 
     if format == "json" {
         let result = serde_json::json!({
@@ -420,7 +457,7 @@ pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()>
     }
 
     // Find children (with optional scope filtering)
-    let children = if scope.is_empty() {
+    let mut children: Vec<db::SearchResult> = if scope.is_empty() {
         db::find_implementations(&conn, name, 50)?
     } else {
         let all = db::find_implementations(&conn, name, 200)?;
@@ -437,6 +474,10 @@ pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()>
             true
         }).collect()
     };
+    let resolver = PathResolver::from_conn(root, &conn);
+    for c in &mut children {
+        c.path = resolver.resolve(&c.path);
+    }
     if !children.is_empty() {
         println!("\n  {}", "Children:".cyan());
         for c in &children {
@@ -459,7 +500,11 @@ pub fn cmd_usages(root: &Path, symbol: &str, limit: usize, format: &str, scope: 
 
         if refs_count > 0 {
             // Use indexed references with scope filtering
-            let refs = db::find_references_scoped(&conn, symbol, limit, scope)?;
+            let mut refs = db::find_references_scoped(&conn, symbol, limit, scope)?;
+            let resolver = PathResolver::from_conn(root, &conn);
+            for r in &mut refs {
+                r.path = resolver.resolve(&r.path);
+            }
 
             if format == "json" {
                 println!("{}", serde_json::to_string_pretty(&refs)?);

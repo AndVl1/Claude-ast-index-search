@@ -23,7 +23,7 @@ pub mod analysis;
 pub mod project_info;
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -33,8 +33,53 @@ use grep_regex::RegexMatcher;
 use grep_searcher::{SearcherBuilder, sinks::UTF8};
 use grep_searcher::MmapChoice;
 use ignore::WalkBuilder;
+use rusqlite::Connection;
 
 use crate::db;
+
+/// Resolves stored relative paths to absolute paths when extra roots are configured.
+///
+/// The index stores paths relative to whichever root a file was discovered
+/// under (primary or an extra root added via `add-root`). Without this, output
+/// like `src/foo/Bar.java` is ambiguous — consumers can't tell whether to
+/// look under the primary project or an extra root.
+///
+/// When no extra roots exist, [`resolve`] is a no-op so single-root output
+/// stays byte-for-byte identical. When extras are configured, it probes each
+/// root in order and returns the first absolute path that exists on disk.
+pub struct PathResolver {
+    primary: PathBuf,
+    extra: Vec<PathBuf>,
+}
+
+impl PathResolver {
+    pub fn from_conn(primary: &Path, conn: &Connection) -> Self {
+        let extra = db::get_extra_roots(conn)
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+        Self { primary: primary.to_path_buf(), extra }
+    }
+
+    /// Absolute path of a stored relative path. Returns `rel` unchanged when
+    /// no extra roots are configured; otherwise probes primary then each
+    /// extra root and returns the first match on disk. Falls back to `rel`
+    /// as-is if no root contains the file (stale index), so output never
+    /// lies about a file's location.
+    pub fn resolve(&self, rel: &str) -> String {
+        if self.extra.is_empty() {
+            return rel.to_string();
+        }
+        for root in std::iter::once(&self.primary).chain(self.extra.iter()) {
+            let abs = root.join(rel);
+            if abs.exists() {
+                return abs.to_string_lossy().into_owned();
+            }
+        }
+        rel.to_string()
+    }
+}
 
 /// Check if no_ignore mode is enabled for this project
 pub fn is_no_ignore_enabled(root: &Path) -> bool {
