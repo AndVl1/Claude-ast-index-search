@@ -64,3 +64,13 @@ Reply with exactly these four headings:
 No preamble, no sign-off, no "let me know if you need more" — just the four sections.
 
 If you can't answer (the area isn't in the codebase, or the question is outside the scope of the repo), say that in the Answer section and stop. An honest "I can't tell from the code" is a valid answer.
+
+## Output discipline
+
+The very first printable character of your final reply MUST be `#` — the
+heading of the `## Answer (one paragraph)` section. No thinking-out-loud
+prefix ("Let me check one more thing", "Now I have the full picture",
+"Alright, here's what I found", "Everything's nailed down"). Those lines
+are fine during your tool-using phase; they must not appear in the reply
+you submit. If any slipped in while drafting, delete them before sending.
+Four sections, nothing outside them.

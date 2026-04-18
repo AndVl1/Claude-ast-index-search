@@ -90,3 +90,11 @@ cargo test  --release --workspace  → <X passed, Y failed>
 ```
 
 If you got stuck — can't reproduce, root cause unclear, fix broke another test — say so in place. Partial, honest output beats a confident fake one.
+
+## Output discipline
+
+The very first printable character of your final reply MUST be `#` — the
+heading of the `## Reproduction` section. No lead-in sentence ("Let me
+provide the report", "Alright — here are my findings", "Good. Report
+follows"). No sign-off at the bottom either. If you drafted a preamble
+mid-reply, delete it before sending. Five sections, nothing outside them.

@@ -83,3 +83,11 @@ cargo test  --release --workspace  → <X passed, Y failed>
 ```
 
 Keep the whole report under 400 words. A review that scrolls for pages is a review that doesn't get read.
+
+## Output discipline
+
+The very first printable character of your final reply MUST be `#` — the
+heading of the `## Summary` section. No lead-in sentence ("Here's the
+review", "I have everything I need. Final report:", "Alright — my take").
+No sign-off either. If you drafted a preamble mid-reply, delete it before
+sending. Five sections, nothing outside them.
