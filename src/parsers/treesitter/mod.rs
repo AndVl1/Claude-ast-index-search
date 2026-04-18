@@ -28,6 +28,7 @@ pub mod scala;
 pub mod sql;
 pub mod swift;
 pub mod typescript;
+pub mod zig;
 
 use anyhow::Result;
 use tree_sitter::{Language, Parser, Tree};
@@ -85,6 +86,7 @@ pub fn get_treesitter_parser(file_type: FileType) -> Option<&'static dyn Languag
         FileType::Sql => Some(&sql::SQL_PARSER),
         FileType::Swift => Some(&swift::SWIFT_PARSER),
         FileType::TypeScript => Some(&typescript::TYPESCRIPT_PARSER),
+        FileType::Zig => Some(&zig::ZIG_PARSER),
         _ => None,
     }
 }

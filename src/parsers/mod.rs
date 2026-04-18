@@ -446,6 +446,7 @@ pub enum FileType {
     Groovy,
     R,
     Sql,
+    Zig,
 }
 
 impl FileType {
@@ -481,6 +482,7 @@ impl FileType {
             "sql" => Some(FileType::Sql),
             "groovy" | "gradle" => Some(FileType::Groovy),
             "r" | "R" => Some(FileType::R),
+            "zig" | "zon" => Some(FileType::Zig),
             _ => None,
         }
     }
@@ -615,6 +617,8 @@ fn strip_comments(content: &str, file_type: FileType) -> String {
         FileType::Matlab => strip_matlab_comments(content),
         // SQL: -- line comments and /* */ block comments (C-style)
         FileType::Sql => strip_c_comments(content, false),
+        // Zig: only // line comments — no block comments in the language.
+        FileType::Zig => strip_line_comments(content),
 
         // Vue/Svelte: comments stripped after script extraction
         // Common Lisp: tree-sitter handles comments natively (unreachable)

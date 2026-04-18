@@ -1,6 +1,6 @@
 # ast-index v3.38.0
 
-Fast code search CLI for 30 programming languages. Native Rust implementation.
+Fast code search CLI for 31 programming languages. Native Rust implementation.
 
 ## Supported Projects
 
@@ -10,6 +10,7 @@ Fast code search CLI for 30 programming languages. Native Rust implementation.
 | iOS | Swift, Objective-C | `.swift`, `.m`, `.h` |
 | Web/Frontend | TypeScript, JavaScript | `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.vue`, `.svelte` |
 | Systems | Rust | `.rs` |
+| Systems | Zig | `.zig`, `.zon` |
 | Backend | C#, Python, Go, C++, Scala | `.cs`, `.py`, `.go`, `.cpp`, `.cc`, `.c`, `.hpp`, `.scala`, `.sc` |
 | Backend | PHP | `.php`, `.phtml` |
 | Scripting | Ruby, Perl | `.rb`, `.pm`, `.pl`, `.t` |

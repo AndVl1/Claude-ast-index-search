@@ -58,6 +58,7 @@ pub enum ProjectType {
     Ruby,      // Ruby - Gemfile, *.gemspec
     Scala,     // Scala - build.sbt
     Matlab,    // Matlab - .m files with classdef/function
+    Zig,       // Zig - build.zig, build.zig.zon
     Mixed,     // Multiple platforms present
     Unknown,
 }
@@ -81,6 +82,7 @@ impl ProjectType {
             ProjectType::Ruby => "Ruby",
             ProjectType::Scala => "Scala",
             ProjectType::Matlab => "Matlab",
+            ProjectType::Zig => "Zig",
             ProjectType::Mixed => "Mixed",
             ProjectType::Unknown => "Unknown",
         }
@@ -106,6 +108,7 @@ impl ProjectType {
             "ruby" | "rb" | "rails" => Some(ProjectType::Ruby),
             "scala" | "sbt" => Some(ProjectType::Scala),
             "matlab" | "m" => Some(ProjectType::Matlab),
+            "zig" => Some(ProjectType::Zig),
             _ => None,
         }
     }
@@ -405,11 +408,14 @@ pub fn detect_project_type(root: &Path) -> ProjectType {
                 .unwrap_or(false)
         };
 
+    // Zig project detection: build.zig (primary) or build.zig.zon (package manifest)
+    let has_zig = root.join("build.zig").exists() || root.join("build.zig.zon").exists();
+
     // Count how many platforms are detected
     let count = [
         has_gradle, has_swift, has_perl, has_frontend, has_python, has_go,
         has_rust, has_bazel, has_bsl, has_csharp, has_cpp, has_dart,
-        has_php, has_ruby, has_scala, has_matlab,
+        has_php, has_ruby, has_scala, has_matlab, has_zig,
     ]
         .iter()
         .filter(|&&x| x)
@@ -449,6 +455,8 @@ pub fn detect_project_type(root: &Path) -> ProjectType {
         ProjectType::Scala
     } else if has_matlab {
         ProjectType::Matlab
+    } else if has_zig {
+        ProjectType::Zig
     } else {
         ProjectType::Unknown
     }

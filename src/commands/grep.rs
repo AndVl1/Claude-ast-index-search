@@ -25,7 +25,7 @@ use regex::Regex;
 use super::{search_files_limited, relative_path};
 
 /// All source code extensions (for grep-based commands: todo, search, callers, etc.)
-pub const ALL_SOURCE_EXTENSIONS: [&str; 51] = [
+pub const ALL_SOURCE_EXTENSIONS: [&str; 52] = [
     "kt", "java", "swift", "m", "h",           // Mobile
     "dart",                                      // Flutter
     "gd",                                        // GDScript (Godot)
@@ -35,6 +35,7 @@ pub const ALL_SOURCE_EXTENSIONS: [&str; 51] = [
     "py",                                        // Python
     "go",                                        // Go
     "rs",                                        // Rust
+    "zig",                                       // Zig
     "cs",                                        // C#
     "cpp", "cc", "c", "hpp",                    // C++
     "scala", "sc",                               // Scala
