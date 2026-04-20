@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ast_index::{db, commands, indexer};
 
@@ -848,10 +848,22 @@ fn find_project_root_for_write() -> Result<PathBuf> {
 fn find_project_root_for_read() -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let home = dirs::home_dir();
+    find_project_root_for_read_at(&cwd, home.as_deref())
+}
+
+/// Pure helper for `find_project_root_for_read`: walks ancestors of `cwd`
+/// looking for the nearest directory that either has an existing index DB
+/// or carries a project/VCS marker (`.git`, `Cargo.toml`, `settings.gradle`,
+/// etc.). Stops at `home` to avoid escaping into the user's home directory.
+/// Returns `cwd` itself if nothing is found.
+///
+/// Extracted from `find_project_root_for_read` so it can be unit-tested
+/// without touching `std::env::current_dir()` or the real `$HOME`.
+fn find_project_root_for_read_at(cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
     for ancestor in cwd.ancestors() {
         // Never go above $HOME — prevents indexing entire user directory
-        if let Some(ref h) = home {
-            if ancestor == h.as_path() {
+        if let Some(h) = home {
+            if ancestor == h {
                 break;
             }
         }
@@ -920,5 +932,172 @@ fn find_project_root_for_read() -> Result<PathBuf> {
             return Ok(ancestor.to_path_buf());
         }
     }
-    Ok(cwd)
+    Ok(cwd.to_path_buf())
+}
+
+#[cfg(test)]
+mod root_lookup_tests {
+    //! Unit tests for `find_project_root_for_read_at`.
+    //!
+    //! These exercise the marker-precedence logic (VCS and project-type
+    //! markers) without touching the real index cache directory — we never
+    //! materialise a DB, so the `db::db_exists` branch is not covered here
+    //! (that's exercised implicitly by `tests/update_extra_roots_tests.rs`
+    //! and `tests/path_resolver_tests.rs`).
+    //!
+    //! These tests exist primarily to pin current behaviour before the
+    //! #30 `--walk-up` opt-in flag lands, so any intentional change shows
+    //! up as a red test.
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn touch(path: &std::path::Path) {
+        if let Some(p) = path.parent() {
+            fs::create_dir_all(p).unwrap();
+        }
+        fs::write(path, b"").unwrap();
+    }
+
+    #[test]
+    fn returns_cwd_when_no_markers_anywhere() {
+        let tmp = TempDir::new().unwrap();
+        let sub = tmp.path().join("nested/deep");
+        fs::create_dir_all(&sub).unwrap();
+
+        // home above the tmp so the walk can run freely; no markers anywhere
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at(&sub, Some(home)).unwrap();
+        // Walk exits without a match → fallback is `cwd`.
+        assert_eq!(got, sub);
+    }
+
+    #[test]
+    fn stops_at_git_marker_in_cwd() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        touch(&repo.join(".git/HEAD"));
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at(&repo, Some(home)).unwrap();
+        assert_eq!(got, repo);
+    }
+
+    #[test]
+    fn walks_up_to_git_when_subdir_has_no_marker() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let sub = repo.join("crates/ast-index-mcp/src");
+        touch(&repo.join(".git/HEAD"));
+        fs::create_dir_all(&sub).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at(&sub, Some(home)).unwrap();
+        assert_eq!(got, repo, "should walk up to `repo` which has .git");
+    }
+
+    #[test]
+    fn nearest_marker_wins_over_further_ancestor() {
+        // This documents the current (#30-reported) behaviour: if a nested
+        // subdir carries its own VCS marker, the walk stops there and does
+        // NOT reach the outer parent that might already own an index.
+        let tmp = TempDir::new().unwrap();
+        let outer = tmp.path().join("outer");
+        let inner = outer.join("submodule");
+        touch(&outer.join(".git/HEAD"));
+        touch(&inner.join(".git/HEAD")); // submodule marker
+        fs::create_dir_all(inner.join("src")).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let cwd = inner.join("src");
+        let got = find_project_root_for_read_at(&cwd, Some(home)).unwrap();
+        assert_eq!(got, inner, "nested `.git` wins over outer `.git`");
+    }
+
+    #[test]
+    fn arc_vcs_marker_detected_via_arc_head_file() {
+        // Arc (Yandex VCS) detection needs `.arc/HEAD` specifically —
+        // not just a `.arc/` directory (which exists on every arc mount).
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        touch(&repo.join(".arc/HEAD"));
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at(&repo, Some(home)).unwrap();
+        assert_eq!(got, repo);
+    }
+
+    #[test]
+    fn gradle_kts_marker_triggers_match() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("gradle-proj");
+        touch(&root.join("settings.gradle.kts"));
+        fs::create_dir_all(root.join("app/src")).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got =
+            find_project_root_for_read_at(&root.join("app/src"), Some(home)).unwrap();
+        assert_eq!(got, root);
+    }
+
+    #[test]
+    fn cargo_toml_marker_triggers_match() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("cargo-proj");
+        touch(&root.join("Cargo.toml"));
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at(&root.join("src"), Some(home)).unwrap();
+        assert_eq!(got, root);
+    }
+
+    #[test]
+    fn xcodeproj_extension_triggers_match() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("ios-proj");
+        fs::create_dir_all(root.join("MyApp.xcodeproj")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at(&root.join("src"), Some(home)).unwrap();
+        assert_eq!(got, root);
+    }
+
+    #[test]
+    fn walk_stops_at_home_boundary() {
+        // A marker ABOVE $HOME must not be returned — prevents
+        // accidentally treating the user's home directory (or higher)
+        // as the project root.
+        let tmp = TempDir::new().unwrap();
+        let fake_home = tmp.path().join("home");
+        let above_home = tmp.path(); // tmp is parent of fake_home
+        touch(&above_home.join(".git/HEAD")); // marker ABOVE home — should NOT match
+
+        let proj = fake_home.join("user/proj");
+        fs::create_dir_all(&proj).unwrap();
+
+        let got = find_project_root_for_read_at(&proj, Some(&fake_home)).unwrap();
+        // No marker at or below $HOME → falls back to cwd
+        assert_eq!(got, proj, "walk must stop at $HOME, marker above is ignored");
+    }
+
+    #[test]
+    fn git_wins_over_deeper_cargo_toml() {
+        // Test of ancestor-order: we walk FROM cwd UPWARDS, so the FIRST
+        // matching ancestor wins. If Cargo.toml is in `repo/crate/` and
+        // .git is in `repo/`, cwd=`repo/crate/src` should return
+        // `repo/crate` (Cargo.toml in closer ancestor).
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let kid = repo.join("crate");
+        touch(&repo.join(".git/HEAD"));
+        touch(&kid.join("Cargo.toml"));
+        fs::create_dir_all(kid.join("src")).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got =
+            find_project_root_for_read_at(&kid.join("src"), Some(home)).unwrap();
+        assert_eq!(got, kid, "closer Cargo.toml wins over further .git");
+    }
 }

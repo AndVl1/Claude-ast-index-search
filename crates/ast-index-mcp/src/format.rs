@@ -266,3 +266,203 @@ fn truncate(s: &str, max: usize) -> String {
         format!("{cut}…")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- search shaper ---
+
+    #[test]
+    fn search_renders_all_four_sections_compactly() {
+        let json = r#"{
+            "files": ["src/a.rs", "src/b.rs"],
+            "symbols": [
+                {"name":"Foo","kind":"class","path":"src/a.rs","line":10}
+            ],
+            "references": [
+                {"name":"Foo","usage_count":3}
+            ],
+            "content_matches": [
+                {"path":"src/c.rs","line":42,"content":"let x = Foo::new();"}
+            ]
+        }"#;
+        let out = to_compact("search", json);
+        assert!(out.contains("Files:"));
+        assert!(out.contains("src/a.rs"));
+        assert!(out.contains("Symbols:"));
+        assert!(out.contains("Foo [class] src/a.rs:10"));
+        assert!(out.contains("References (usage counts):"));
+        assert!(out.contains("Foo ×3"));
+        assert!(out.contains("Content:"));
+        assert!(out.contains("src/c.rs:42"));
+    }
+
+    #[test]
+    fn search_with_empty_arrays_returns_no_results() {
+        let json = r#"{
+            "files":[],"symbols":[],"references":[],"content_matches":[]
+        }"#;
+        let out = to_compact("search", json);
+        assert_eq!(out, "(no results)");
+    }
+
+    #[test]
+    fn search_skips_missing_sections() {
+        let json = r#"{"files": ["only/a.rs"]}"#;
+        let out = to_compact("search", json);
+        assert!(out.contains("Files:"));
+        assert!(out.contains("only/a.rs"));
+        assert!(!out.contains("Symbols:"));
+        assert!(!out.contains("Content:"));
+    }
+
+    // --- refs shaper ---
+
+    #[test]
+    fn refs_renders_definitions_imports_usages() {
+        let json = r#"{
+            "definitions": [
+                {"name":"Foo","kind":"class","path":"a.rs","line":5}
+            ],
+            "imports": [
+                {"path":"b.rs","line":1,"signature":"use crate::Foo;"}
+            ],
+            "usages": [
+                {"path":"c.rs","line":42,"context":"Foo::bar()"}
+            ]
+        }"#;
+        let out = to_compact("refs", json);
+        assert!(out.contains("Definitions:"));
+        assert!(out.contains("Foo [class] a.rs:5"));
+        assert!(out.contains("Imports:"));
+        assert!(out.contains("b.rs:1"));
+        assert!(out.contains("use crate::Foo;"));
+        assert!(out.contains("Usages:"));
+        assert!(out.contains("c.rs:42"));
+        assert!(out.contains("Foo::bar()"));
+    }
+
+    // --- usages / callers (ref list) ---
+
+    #[test]
+    fn usages_renders_array_of_refs() {
+        let json = r#"[
+            {"path":"src/a.rs","line":10,"context":"foo();"},
+            {"path":"src/b.rs","line":20,"context":"foo()"}
+        ]"#;
+        let out = to_compact("usages", json);
+        assert!(out.contains("src/a.rs:10"));
+        assert!(out.contains("src/b.rs:20"));
+        assert!(out.contains("foo();"));
+    }
+
+    #[test]
+    fn callers_uses_same_shaper_as_usages() {
+        let json = r#"[{"path":"a.rs","line":1,"context":"foo()"}]"#;
+        assert_eq!(to_compact("usages", json), to_compact("callers", json));
+    }
+
+    // --- symbol / class / implementations (symbol list) ---
+
+    #[test]
+    fn symbol_renders_symbol_lines_with_signatures() {
+        let json = r#"[
+            {"name":"Foo","kind":"class","path":"a.rs","line":5,
+             "signature":"struct Foo<T>"},
+            {"name":"bar","kind":"function","path":"b.rs","line":10}
+        ]"#;
+        let out = to_compact("symbol", json);
+        assert!(out.contains("Foo [class] a.rs:5"));
+        assert!(out.contains("struct Foo<T>"));
+        assert!(out.contains("bar [function] b.rs:10"));
+    }
+
+    #[test]
+    fn implementations_uses_same_shape_as_symbol() {
+        let json = r#"[{"name":"X","kind":"class","path":"a.rs","line":1}]"#;
+        let a = to_compact("symbol", json);
+        let b = to_compact("implementations", json);
+        let c = to_compact("class", json);
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+    }
+
+    // --- find_file ---
+
+    #[test]
+    fn find_file_renders_path_list() {
+        let json = r#"["src/a.rs","src/b.rs","tests/c.rs"]"#;
+        let out = to_compact("find_file", json);
+        assert!(out.contains("src/a.rs"));
+        assert!(out.contains("src/b.rs"));
+        assert!(out.contains("tests/c.rs"));
+    }
+
+    // --- stats ---
+
+    #[test]
+    fn stats_renders_project_counts_and_db_size() {
+        let json = r#"{
+            "project": "Rust",
+            "stats": {
+                "file_count": 100, "symbol_count": 5000,
+                "refs_count": 30000, "module_count": 0,
+                "xml_usages_count": 0, "resources_count": 0,
+                "storyboard_usages_count": 0, "ios_assets_count": 0
+            },
+            "db_size_bytes": 1048576,
+            "db_path": "/tmp/index.db"
+        }"#;
+        let out = to_compact("stats", json);
+        assert!(out.contains("project: Rust"));
+        assert!(out.contains("file_count: 100"));
+        assert!(out.contains("symbol_count: 5000"));
+        assert!(out.contains("refs_count: 30000"));
+        // Zero-counts should be skipped to save tokens
+        assert!(!out.contains("module_count: 0"));
+        assert!(!out.contains("xml_usages_count"));
+        assert!(out.contains("db_size_mb: 1.00"));
+        assert!(out.contains("db_path: /tmp/index.db"));
+    }
+
+    // --- fall-through behaviour ---
+
+    #[test]
+    fn unknown_tool_falls_through_to_compact_json() {
+        // Tools without a shaper fall back to serde_json::to_string (compact)
+        let json = r#"{"foo": "bar"}"#;
+        let out = to_compact("xyz_no_shaper", json);
+        assert!(out.contains("foo"));
+        assert!(out.contains("bar"));
+        // Compact (not pretty-printed)
+        assert!(!out.contains("\n  "));
+    }
+
+    #[test]
+    fn non_json_input_passes_through_trim_end_only() {
+        // outline returns plain text with possible indentation that
+        // matters — leading whitespace is preserved, only trailing
+        // newlines are stripped.
+        let plain = "  Foo [class] file.rs:10\n\n";
+        let out = to_compact("outline", plain);
+        assert_eq!(out, "  Foo [class] file.rs:10");
+    }
+
+    // --- truncate helper ---
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_appends_ellipsis() {
+        assert_eq!(truncate("0123456789abcdef", 10), "0123456789…");
+    }
+
+    #[test]
+    fn truncate_preserves_unicode_chars() {
+        assert_eq!(truncate("πρακτικά", 5), "πρακτ…");
+    }
+}

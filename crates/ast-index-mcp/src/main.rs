@@ -472,15 +472,49 @@ fn call_tool(
         .and_then(Value::as_str)
         .unwrap_or("text");
 
-    // Whether the underlying ast-index command honours `--format json`.
-    // Commands not in this set print plain text regardless of the flag, so
-    // we avoid passing it to keep the argv honest.
-    let supports_json_format = matches!(
-        name,
+    let argv = build_argv(name, &arguments)?;
+
+    let output = Command::new(ast_index_bin)
+        .args(&argv)
+        .current_dir(&resolved_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| format!("failed to spawn {ast_index_bin} — is it on PATH?"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "ast-index exited with {}: {stderr}",
+            output.status
+        ));
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .context("ast-index produced non-UTF8 output")?;
+
+    let rendered = match output_format {
+        "json" => stdout, // caller asked for raw JSON — pass through
+        _ => format::to_compact(name, &stdout),
+    };
+    Ok(rendered)
+}
+
+/// Whether the underlying ast-index command honours `--format json`.
+/// Commands not in this set print plain text regardless of the flag, so
+/// we avoid passing it to keep the argv honest.
+fn supports_json_format(tool: &str) -> bool {
+    matches!(
+        tool,
         "search" | "usages" | "implementations" | "refs" | "stats"
             | "symbol" | "class"
-    );
+    )
+}
 
+/// Translate an MCP `tools/call` invocation into the equivalent
+/// `ast-index <subcommand> <args> [--format json]` argv. Pure function —
+/// no I/O, suitable for unit testing.
+pub fn build_argv(name: &str, arguments: &Value) -> Result<Vec<String>> {
     let mut argv: Vec<String> = Vec::new();
     match name {
         "search" => {
@@ -607,35 +641,11 @@ fn call_tool(
         other => return Err(anyhow!("unknown tool: {other}")),
     }
 
-    if supports_json_format {
+    if supports_json_format(name) {
         argv.push("--format".into());
         argv.push("json".into());
     }
-
-    let output = Command::new(ast_index_bin)
-        .args(&argv)
-        .current_dir(&resolved_root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .with_context(|| format!("failed to spawn {ast_index_bin} — is it on PATH?"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!(
-            "ast-index exited with {}: {stderr}",
-            output.status
-        ));
-    }
-
-    let stdout = String::from_utf8(output.stdout)
-        .context("ast-index produced non-UTF8 output")?;
-
-    let rendered = match output_format {
-        "json" => stdout, // caller asked for raw JSON — pass through
-        _ => format::to_compact(name, &stdout),
-    };
-    Ok(rendered)
+    Ok(argv)
 }
 
 fn require_string(args: &Value, key: &str) -> Result<String> {
@@ -656,5 +666,243 @@ fn push_if_num(argv: &mut Vec<String>, args: &Value, key: &str, flag: &str) {
     if let Some(n) = args.get(key).and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))) {
         argv.push(flag.into());
         argv.push(n.to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    // --- tool_descriptors metadata ---
+
+    #[test]
+    fn descriptors_expose_exactly_twenty_tools() {
+        let names: Vec<String> = tool_descriptors()
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        assert_eq!(names.len(), 20, "MCP must expose 20 tools, got {names:?}");
+    }
+
+    #[test]
+    fn descriptor_names_are_unique() {
+        let names: Vec<String> = tool_descriptors()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        let unique: HashSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "duplicate tool names: {names:?}");
+    }
+
+    #[test]
+    fn every_descriptor_has_required_fields() {
+        for tool in tool_descriptors() {
+            let name = tool.get("name").and_then(Value::as_str).expect("name");
+            assert!(
+                tool.get("description").and_then(Value::as_str).is_some(),
+                "tool {name} missing description"
+            );
+            let schema = tool.get("inputSchema").and_then(Value::as_object).unwrap_or_else(|| {
+                panic!("tool {name} missing inputSchema object")
+            });
+            assert_eq!(
+                schema.get("type").and_then(Value::as_str),
+                Some("object"),
+                "tool {name} inputSchema.type must be 'object'"
+            );
+        }
+    }
+
+    #[test]
+    fn descriptor_set_matches_dispatch() {
+        // Every advertised tool must have a dispatch arm — try building argv
+        // with minimum required args and assert it doesn't return "unknown tool".
+        let stub_args = json!({
+            "query": "x", "file": "f", "symbol": "s", "function": "f",
+            "parent": "p", "name": "n", "module_path": "m",
+            "pattern": "*", "module": "m"
+        });
+        for tool in tool_descriptors() {
+            let name = tool["name"].as_str().unwrap();
+            let result = build_argv(name, &stub_args);
+            assert!(
+                result.is_ok(),
+                "tool {name} advertised but build_argv failed: {result:?}"
+            );
+        }
+    }
+
+    // --- build_argv per-tool ---
+
+    #[test]
+    fn search_minimal_args() {
+        let argv = build_argv("search", &json!({"query": "Foo"})).unwrap();
+        assert_eq!(argv, vec!["search", "Foo", "--format", "json"]);
+    }
+
+    #[test]
+    fn search_full_args() {
+        let argv = build_argv(
+            "search",
+            &json!({
+                "query": "Foo", "limit": 100, "kind": "class",
+                "in_file": "src/", "module": "core", "fuzzy": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "search", "Foo",
+                "--limit", "100",
+                "--type", "class",
+                "--in-file", "src/",
+                "--module", "core",
+                "--fuzzy",
+                "--format", "json",
+            ]
+        );
+    }
+
+    #[test]
+    fn search_missing_required_query_errors() {
+        let err = build_argv("search", &json!({})).unwrap_err();
+        assert!(err.to_string().contains("'query'"), "got: {err}");
+    }
+
+    #[test]
+    fn outline_passes_file_positionally_no_format_flag() {
+        let argv = build_argv("outline", &json!({"file": "src/main.rs"})).unwrap();
+        // outline does not advertise --format json
+        assert_eq!(argv, vec!["outline", "src/main.rs"]);
+    }
+
+    #[test]
+    fn class_with_pattern_and_fuzzy() {
+        let argv = build_argv(
+            "class",
+            &json!({"pattern": "*Service", "fuzzy": true, "limit": 10}),
+        )
+        .unwrap();
+        // class supports --format json
+        assert_eq!(
+            argv,
+            vec![
+                "class",
+                "--pattern", "*Service",
+                "--limit", "10",
+                "--fuzzy",
+                "--format", "json",
+            ]
+        );
+    }
+
+    #[test]
+    fn symbol_with_name_first_then_flags() {
+        let argv = build_argv(
+            "symbol",
+            &json!({"name": "PathResolver", "kind": "class"}),
+        )
+        .unwrap();
+        // name is positional, kind is --type, format=json appended
+        assert_eq!(
+            argv,
+            vec!["symbol", "PathResolver", "--type", "class", "--format", "json"]
+        );
+    }
+
+    #[test]
+    fn hierarchy_requires_name() {
+        let err = build_argv("hierarchy", &json!({})).unwrap_err();
+        assert!(err.to_string().contains("'name'"), "got: {err}");
+    }
+
+    #[test]
+    fn hierarchy_no_format_flag() {
+        // hierarchy is plain-text only
+        let argv = build_argv("hierarchy", &json!({"name": "Foo"})).unwrap();
+        assert_eq!(argv, vec!["hierarchy", "Foo"]);
+    }
+
+    #[test]
+    fn call_tree_translates_underscore_to_hyphen() {
+        let argv = build_argv(
+            "call_tree",
+            &json!({"function": "process", "depth": 4, "limit": 20}),
+        )
+        .unwrap();
+        // MCP tool name has _, but ast-index subcommand is hyphenated
+        assert_eq!(
+            argv,
+            vec!["call-tree", "process", "--depth", "4", "--limit", "20"]
+        );
+    }
+
+    #[test]
+    fn find_file_translates_to_file_subcommand() {
+        let argv = build_argv(
+            "find_file",
+            &json!({"pattern": "*.rs", "exact": true, "limit": 50}),
+        )
+        .unwrap();
+        // MCP tool name is find_file, ast-index subcommand is `file`
+        assert_eq!(argv, vec!["file", "*.rs", "--exact", "--limit", "50"]);
+    }
+
+    #[test]
+    fn changed_no_args_omits_base() {
+        let argv = build_argv("changed", &json!({})).unwrap();
+        assert_eq!(argv, vec!["changed"]);
+    }
+
+    #[test]
+    fn changed_with_base() {
+        let argv = build_argv("changed", &json!({"base": "develop"})).unwrap();
+        assert_eq!(argv, vec!["changed", "--base", "develop"]);
+    }
+
+    #[test]
+    fn deps_dependents_module_required() {
+        for tool in &["deps", "dependents"] {
+            let err = build_argv(tool, &json!({})).unwrap_err();
+            assert!(
+                err.to_string().contains("'module'"),
+                "{tool}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_tool_errors() {
+        let err = build_argv("foo_bar_does_not_exist", &json!({})).unwrap_err();
+        assert!(err.to_string().contains("unknown tool"), "got: {err}");
+    }
+
+    // --- supports_json_format ---
+
+    #[test]
+    fn supports_json_format_correct_set() {
+        let yes = ["search", "usages", "implementations", "refs", "stats", "symbol", "class"];
+        let no  = ["outline", "callers", "rebuild", "find_file", "update",
+                   "hierarchy", "imports", "api", "changed", "module",
+                   "deps", "dependents", "call_tree"];
+        for t in yes {
+            assert!(supports_json_format(t), "{t} should support --format json");
+        }
+        for t in no {
+            assert!(!supports_json_format(t), "{t} should NOT support --format json");
+        }
+    }
+
+    #[test]
+    fn argv_appends_format_json_only_when_supported() {
+        // search: supported → has --format json
+        let a = build_argv("search", &json!({"query": "x"})).unwrap();
+        assert!(a.contains(&"--format".to_string()) && a.contains(&"json".to_string()));
+
+        // outline: not supported → no --format
+        let b = build_argv("outline", &json!({"file": "x"})).unwrap();
+        assert!(!b.contains(&"--format".to_string()));
     }
 }
