@@ -121,16 +121,26 @@ cargo build --release -p ast-index-mcp
 # Binary: target/release/ast-index-mcp
 ```
 
-Exposed tools (10):
+Exposed tools (20):
 
 | Tool | Purpose |
 |------|---------|
 | `search` | Universal search across files, symbols, imports, content |
+| `symbol` | Find symbols by exact name / glob / kind filter (precise alternative to `search`) |
+| `class` | Find classes, interfaces, protocols, enums, structs by name or pattern |
 | `outline` | Structural outline of a file (call before reading >500-line files) |
 | `usages` | Every usage of a symbol (file:line + context) |
 | `callers` | Direct callers of a function |
+| `call_tree` | Recursive caller tree, configurable depth |
 | `implementations` | Types that implement/extend an interface or parent |
+| `hierarchy` | Full inheritance tree — superclasses + subclasses in one call |
 | `refs` | Definitions + imports + usages in one shot |
+| `imports` | Imports / includes of a source file |
+| `api` | Public API of a module (refactoring & changelog prep) |
+| `changed` | Symbols that changed since a base branch (code review) |
+| `module` | Find modules matching a pattern |
+| `deps` | Module dependencies |
+| `dependents` | Reverse deps — who depends on this module |
 | `find_file` | Locate files by name pattern |
 | `stats` | Project type, counts, DB size, extra roots |
 | `rebuild` | Full reindex (slow — prefer `update`) |

@@ -308,6 +308,142 @@ fn tool_descriptors() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "symbol",
+            "description": "Find symbols by exact name or glob pattern, optionally filtered by kind (class/function/method/struct/etc). Sharper than `search` when you know what you're looking for. Use `search` for broad discovery; use this when the name or pattern is specific.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name":         { "type": "string",  "description": "Exact symbol name. Use either 'name' or 'pattern', not both." },
+                    "pattern":      { "type": "string",  "description": "Glob pattern for symbol name (e.g. '*Service', '*Email*')." },
+                    "kind":         { "type": "string",  "description": "Filter by symbol kind: class, interface, function, method, struct, enum, etc." },
+                    "limit":        { "type": "integer", "description": "Max results (default 50)." },
+                    "in_file":      { "type": "string",  "description": "Restrict to files whose path contains this substring." },
+                    "module":       { "type": "string",  "description": "Restrict to files whose path starts with this prefix." },
+                    "fuzzy":        { "type": "boolean", "description": "Enable typo-tolerant fuzzy matching." },
+                    "project_root": { "type": "string",  "description": "Absolute path to project root. Optional." },
+                    "format":       { "type": "string",  "enum": ["text", "json"], "description": "Output format. Default 'text'." }
+                }
+            }
+        }),
+        json!({
+            "name": "class",
+            "description": "Find classes, interfaces, objects, enums, protocols, structs, actors, or packages by name or glob pattern. A type-filtered `symbol` lookup. Use this for 'where is class X defined' questions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name":         { "type": "string",  "description": "Class/interface/type name. Use either 'name' or 'pattern', not both." },
+                    "pattern":      { "type": "string",  "description": "Glob pattern (e.g. '*Controller', '*Handler*')." },
+                    "limit":        { "type": "integer", "description": "Max results (default 50)." },
+                    "in_file":      { "type": "string",  "description": "Restrict to files whose path contains this substring." },
+                    "module":       { "type": "string",  "description": "Restrict to files whose path starts with this prefix." },
+                    "fuzzy":        { "type": "boolean", "description": "Enable typo-tolerant fuzzy matching." },
+                    "project_root": { "type": "string",  "description": "Absolute path to project root. Optional." },
+                    "format":       { "type": "string",  "enum": ["text", "json"], "description": "Output format. Default 'text'." }
+                }
+            }
+        }),
+        json!({
+            "name": "hierarchy",
+            "description": "Show the inheritance tree for a class — both its superclasses/protocols it conforms to AND its subclasses/implementors. Complements `implementations` (which only shows one direction). Use this to understand the full inheritance neighborhood of a type.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name":         { "type": "string", "description": "Class, interface, protocol, trait, or abstract class name." },
+                    "in_file":      { "type": "string", "description": "Restrict to a specific file — useful when multiple classes share the same name (e.g. inner DTOs)." },
+                    "module":       { "type": "string", "description": "Restrict to files whose path starts with this prefix." },
+                    "project_root": { "type": "string", "description": "Absolute path to project root. Optional." }
+                },
+                "required": ["name"]
+            }
+        }),
+        json!({
+            "name": "imports",
+            "description": "List all imports / uses / includes declared in a source file. Fast way to understand a file's dependency fan-out without reading the file itself.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "file":         { "type": "string", "description": "Path to the source file (relative to project root or absolute)." },
+                    "project_root": { "type": "string", "description": "Absolute path to project root. Optional." }
+                },
+                "required": ["file"]
+            }
+        }),
+        json!({
+            "name": "api",
+            "description": "Show the public API (exported symbols) of a module — classes, functions, interfaces visible from outside the module. Use this when planning a refactor or writing a changelog entry.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "module_path":  { "type": "string",  "description": "Module path or directory prefix (e.g. 'src/auth', 'com.example.billing')." },
+                    "limit":        { "type": "integer", "description": "Max results (default 100)." },
+                    "project_root": { "type": "string",  "description": "Absolute path to project root. Optional." }
+                },
+                "required": ["module_path"]
+            }
+        }),
+        json!({
+            "name": "changed",
+            "description": "List symbols that changed since a base git/arc branch — additions, modifications, deletions. Essential for code-review prep, changelog generation, 'what did I actually change' questions. Default base is `origin/main` for git repos, `trunk` for arc repos.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "base":         { "type": "string", "description": "Base branch name. Defaults to 'origin/main' (git) or 'trunk' (arc)." },
+                    "project_root": { "type": "string", "description": "Absolute path to project root. Optional." }
+                }
+            }
+        }),
+        json!({
+            "name": "module",
+            "description": "Find modules matching a pattern. A module is the coarse unit above file — Gradle subproject, Cargo crate, Python package, Go package, etc. Use this to orient yourself in a large monorepo before drilling into files.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "pattern":      { "type": "string",  "description": "Glob or substring to match module paths." },
+                    "limit":        { "type": "integer", "description": "Max results (default 50)." },
+                    "project_root": { "type": "string",  "description": "Absolute path to project root. Optional." }
+                },
+                "required": ["pattern"]
+            }
+        }),
+        json!({
+            "name": "deps",
+            "description": "Show what a given module depends on (its dependency list). Complements `dependents` which goes the other direction. Use for 'what does moduleX pull in' questions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "module":       { "type": "string", "description": "Module path (as returned by `module`)." },
+                    "project_root": { "type": "string", "description": "Absolute path to project root. Optional." }
+                },
+                "required": ["module"]
+            }
+        }),
+        json!({
+            "name": "dependents",
+            "description": "Reverse-deps: which modules depend on this one. Use this for impact analysis — 'if I refactor module X, what else breaks'. Critical before any module-level API change.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "module":       { "type": "string", "description": "Module path." },
+                    "project_root": { "type": "string", "description": "Absolute path to project root. Optional." }
+                },
+                "required": ["module"]
+            }
+        }),
+        json!({
+            "name": "call_tree",
+            "description": "Recursive caller tree — shows callers of a function, then THEIR callers, up to a configurable depth. Use for understanding how deep a function's usage reaches without chasing references by hand.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "function":     { "type": "string",  "description": "Function or method name." },
+                    "depth":        { "type": "integer", "description": "Max tree depth (default 3)." },
+                    "limit":        { "type": "integer", "description": "Max callers per level (default 10)." },
+                    "project_root": { "type": "string",  "description": "Absolute path to project root. Optional." }
+                },
+                "required": ["function"]
+            }
+        }),
     ]
 }
 
@@ -342,6 +478,7 @@ fn call_tool(
     let supports_json_format = matches!(
         name,
         "search" | "usages" | "implementations" | "refs" | "stats"
+            | "symbol" | "class"
     );
 
     let mut argv: Vec<String> = Vec::new();
@@ -401,6 +538,71 @@ fn call_tool(
         }
         "update" => {
             argv.push("update".into());
+        }
+        "symbol" => {
+            argv.push("symbol".into());
+            if let Some(n) = arguments.get("name").and_then(Value::as_str) {
+                argv.push(n.into());
+            }
+            push_if_str(&mut argv, &arguments, "pattern", "--pattern");
+            push_if_str(&mut argv, &arguments, "kind", "--type");
+            push_if_num(&mut argv, &arguments, "limit", "--limit");
+            push_if_str(&mut argv, &arguments, "in_file", "--in-file");
+            push_if_str(&mut argv, &arguments, "module", "--module");
+            if arguments.get("fuzzy").and_then(Value::as_bool).unwrap_or(false) {
+                argv.push("--fuzzy".into());
+            }
+        }
+        "class" => {
+            argv.push("class".into());
+            if let Some(n) = arguments.get("name").and_then(Value::as_str) {
+                argv.push(n.into());
+            }
+            push_if_str(&mut argv, &arguments, "pattern", "--pattern");
+            push_if_num(&mut argv, &arguments, "limit", "--limit");
+            push_if_str(&mut argv, &arguments, "in_file", "--in-file");
+            push_if_str(&mut argv, &arguments, "module", "--module");
+            if arguments.get("fuzzy").and_then(Value::as_bool).unwrap_or(false) {
+                argv.push("--fuzzy".into());
+            }
+        }
+        "hierarchy" => {
+            argv.push("hierarchy".into());
+            argv.push(require_string(&arguments, "name")?);
+            push_if_str(&mut argv, &arguments, "in_file", "--in-file");
+            push_if_str(&mut argv, &arguments, "module", "--module");
+        }
+        "imports" => {
+            argv.push("imports".into());
+            argv.push(require_string(&arguments, "file")?);
+        }
+        "api" => {
+            argv.push("api".into());
+            argv.push(require_string(&arguments, "module_path")?);
+            push_if_num(&mut argv, &arguments, "limit", "--limit");
+        }
+        "changed" => {
+            argv.push("changed".into());
+            push_if_str(&mut argv, &arguments, "base", "--base");
+        }
+        "module" => {
+            argv.push("module".into());
+            argv.push(require_string(&arguments, "pattern")?);
+            push_if_num(&mut argv, &arguments, "limit", "--limit");
+        }
+        "deps" => {
+            argv.push("deps".into());
+            argv.push(require_string(&arguments, "module")?);
+        }
+        "dependents" => {
+            argv.push("dependents".into());
+            argv.push(require_string(&arguments, "module")?);
+        }
+        "call_tree" => {
+            argv.push("call-tree".into());
+            argv.push(require_string(&arguments, "function")?);
+            push_if_num(&mut argv, &arguments, "depth", "--depth");
+            push_if_num(&mut argv, &arguments, "limit", "--limit");
         }
         other => return Err(anyhow!("unknown tool: {other}")),
     }
