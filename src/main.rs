@@ -104,6 +104,13 @@ struct Cli {
     /// Output format: text or json
     #[arg(long, global = true, default_value = "text")]
     format: String,
+
+    /// Prefer any existing parent-directory index over nested project/VCS
+    /// markers. Useful in monorepos where subdirectories carry their own
+    /// markers but share a root-level index. Can also be enabled via
+    /// AST_INDEX_WALK_UP=1.
+    #[arg(long, global = true)]
+    walk_up: bool,
 }
 
 #[derive(Subcommand)]
@@ -654,9 +661,17 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Walk-up is opt-in via CLI flag OR AST_INDEX_WALK_UP env var. CLI wins.
+    let walk_up = cli.walk_up
+        || std::env::var("AST_INDEX_WALK_UP")
+            .map(|v| {
+                let t = v.trim();
+                !t.is_empty() && t != "0" && !t.eq_ignore_ascii_case("false")
+            })
+            .unwrap_or(false);
     let root = match &cli.command {
         Commands::Rebuild { .. } | Commands::Clear => find_project_root_for_write()?,
-        _ => find_project_root_for_read()?,
+        _ => find_project_root_for_read(walk_up)?,
     };
     let format = cli.format.as_str();
 
@@ -845,10 +860,20 @@ fn find_project_root_for_write() -> Result<PathBuf> {
     Ok(std::env::current_dir()?)
 }
 
-fn find_project_root_for_read() -> Result<PathBuf> {
+fn find_project_root_for_read(walk_up: bool) -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let home = dirs::home_dir();
-    find_project_root_for_read_at(&cwd, home.as_deref())
+    find_project_root_for_read_at_with_db(&cwd, home.as_deref(), walk_up, db::db_exists)
+}
+
+/// Test-friendly wrapper for `find_project_root_for_read` that uses the
+/// real `db::db_exists` and defaults to the legacy (walk-up-off) behaviour.
+#[cfg(test)]
+fn find_project_root_for_read_at(cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
+    // Default behaviour for pre-existing tests: walk-up disabled.
+    // db_exists closure returns false so only marker-based detection runs,
+    // which is what the pre-existing tests exercise.
+    find_project_root_for_read_at_with_db(cwd, home, false, |_| false)
 }
 
 /// Pure helper for `find_project_root_for_read`: walks ancestors of `cwd`
@@ -857,9 +882,35 @@ fn find_project_root_for_read() -> Result<PathBuf> {
 /// etc.). Stops at `home` to avoid escaping into the user's home directory.
 /// Returns `cwd` itself if nothing is found.
 ///
-/// Extracted from `find_project_root_for_read` so it can be unit-tested
-/// without touching `std::env::current_dir()` or the real `$HOME`.
-fn find_project_root_for_read_at(cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
+/// `walk_up == true` changes the precedence: a FIRST pass walks all
+/// ancestors (up to `home`) looking only for `db_exists`. Only if no
+/// existing DB is found does the legacy per-ancestor (db-or-marker) walk
+/// run. This is opt-in for monorepo scenarios where nested `.git` /
+/// `Cargo.toml` markers would otherwise short-circuit the walk before
+/// reaching a pre-built root index.
+///
+/// `db_exists` is injected so tests can simulate DBs without touching the
+/// real cache directory.
+fn find_project_root_for_read_at_with_db(
+    cwd: &Path,
+    home: Option<&Path>,
+    walk_up: bool,
+    db_exists: impl Fn(&Path) -> bool,
+) -> Result<PathBuf> {
+    // Opt-in first pass: DB-only across ALL ancestors, winning over any
+    // marker we'd otherwise stop at. Bounded by $HOME.
+    if walk_up {
+        for ancestor in cwd.ancestors() {
+            if let Some(h) = home {
+                if ancestor == h {
+                    break;
+                }
+            }
+            if db_exists(ancestor) {
+                return Ok(ancestor.to_path_buf());
+            }
+        }
+    }
     for ancestor in cwd.ancestors() {
         // Never go above $HOME — prevents indexing entire user directory
         if let Some(h) = home {
@@ -868,7 +919,7 @@ fn find_project_root_for_read_at(cwd: &Path, home: Option<&Path>) -> Result<Path
             }
         }
         // Check if an index DB already exists for this ancestor
-        if db::db_exists(ancestor) {
+        if db_exists(ancestor) {
             return Ok(ancestor.to_path_buf());
         }
         // VCS markers
@@ -1099,5 +1150,130 @@ mod root_lookup_tests {
         let got =
             find_project_root_for_read_at(&kid.join("src"), Some(home)).unwrap();
         assert_eq!(got, kid, "closer Cargo.toml wins over further .git");
+    }
+
+    // --- walk-up opt-in (#30) ---
+
+    /// Helper: construct a `db_exists` closure that returns true only for
+    /// the given path (and whatever canonical variant Rust produces).
+    fn db_at(path: &std::path::Path) -> impl Fn(&std::path::Path) -> bool + '_ {
+        move |p| p == path
+    }
+
+    #[test]
+    fn walk_up_off_stops_at_nested_marker_even_when_parent_has_db() {
+        // Default behaviour: nested .git wins, ignores parent DB.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("repo");
+        let sub = root.join("packages/module");
+        touch(&sub.join(".git/HEAD"));
+        fs::create_dir_all(&sub).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at_with_db(
+            &sub,
+            Some(home),
+            false, // walk_up disabled
+            db_at(&root),
+        )
+        .unwrap();
+        assert_eq!(
+            got, sub,
+            "with walk_up=false, nested marker wins over parent DB"
+        );
+    }
+
+    #[test]
+    fn walk_up_on_prefers_parent_db_over_nested_marker() {
+        // With walk-up enabled: parent DB wins.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("repo");
+        let sub = root.join("packages/module");
+        touch(&sub.join(".git/HEAD"));
+        fs::create_dir_all(&sub).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at_with_db(
+            &sub,
+            Some(home),
+            true, // walk_up enabled
+            db_at(&root),
+        )
+        .unwrap();
+        assert_eq!(
+            got, root,
+            "with walk_up=true, parent DB wins over nested marker"
+        );
+    }
+
+    #[test]
+    fn walk_up_on_still_stops_at_home_boundary() {
+        // walk_up must not escape $HOME.
+        let tmp = TempDir::new().unwrap();
+        let fake_home = tmp.path().join("home");
+        let above_home = tmp.path();
+        let proj = fake_home.join("user/proj");
+        fs::create_dir_all(&proj).unwrap();
+
+        // DB is ABOVE $HOME — should be ignored.
+        let got = find_project_root_for_read_at_with_db(
+            &proj,
+            Some(&fake_home),
+            true,
+            db_at(above_home),
+        )
+        .unwrap();
+        assert_eq!(
+            got, proj,
+            "walk_up must not escape $HOME even to find an existing DB"
+        );
+    }
+
+    #[test]
+    fn walk_up_off_still_finds_same_level_db() {
+        // Regression: when walk_up is off, a DB in the nearest ancestor
+        // is still preferred over a marker in the SAME ancestor. This is
+        // the pre-existing behaviour and must not regress.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("repo");
+        touch(&root.join(".git/HEAD"));
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at_with_db(
+            &root.join("src"),
+            Some(home),
+            false,
+            db_at(&root), // DB at root
+        )
+        .unwrap();
+        // Both db and marker are at `root` — either is a valid answer,
+        // but current code checks db_exists first in the per-ancestor
+        // loop, so DB wins.
+        assert_eq!(got, root);
+    }
+
+    #[test]
+    fn walk_up_on_falls_back_to_markers_when_no_parent_db() {
+        // With walk_up=true but no DB anywhere, behaviour falls back to
+        // the marker-based walk — identical to default.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("repo");
+        let sub = root.join("packages/module");
+        touch(&root.join(".git/HEAD"));
+        fs::create_dir_all(&sub).unwrap();
+
+        let home = tmp.path().parent().unwrap();
+        let got = find_project_root_for_read_at_with_db(
+            &sub,
+            Some(home),
+            true,
+            |_| false, // no DB anywhere
+        )
+        .unwrap();
+        assert_eq!(
+            got, root,
+            "walk_up=true without any DB falls back to marker walk"
+        );
     }
 }

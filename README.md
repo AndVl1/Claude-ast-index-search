@@ -89,6 +89,28 @@ ast-index implementations Presenter
 ast-index usages Repository
 ```
 
+### Monorepo workflow
+
+If your repo has subdirectories with their own VCS markers (git submodules,
+subtrees, nested `Cargo.toml` / `settings.gradle`), read-commands normally
+stop at the nearest marker — they won't reuse a parent-level index even
+if one exists. Pass `--walk-up`, or set `AST_INDEX_WALK_UP=1`, to tell
+the lookup to prefer any existing parent DB over nested markers:
+
+```bash
+# once, in the root
+cd /monorepo && ast-index rebuild
+
+# later, from any subproject — reuse the root index
+AST_INDEX_WALK_UP=1 ast-index search ViewModel
+# or per-call:
+ast-index --walk-up search ViewModel
+```
+
+This is opt-in by design: silently preferring a far-away parent DB could
+surface a stale or misconfigured index from an earlier accidental
+`rebuild` higher up. With the flag you explicitly say "trust the parent".
+
 ## AI Agent Integration
 
 ### Claude Code Plugin
@@ -468,6 +490,18 @@ exclude:
 ```
 
 ## Changelog
+
+### 3.39.0
+- **Zig language support** — tree-sitter based parser with `.zig` and `.zon` extensions, `ProjectType::Zig` auto-detection via `build.zig` / `build.zig.zon`, integration test covering fn/struct/field/test-block symbol extraction
+- **MCP server expanded to 20 tools** — added `symbol`, `class`, `hierarchy`, `imports`, `api`, `changed`, `module`, `deps`, `dependents`, `call_tree` on top of the original 10. Covers precise symbol lookup, file context, module-level navigation, and code-review workflows without requiring multiple `ast-index` command shells. See [`docs/mcp-setup.md`](docs/mcp-setup.md)
+- **`--walk-up` / `AST_INDEX_WALK_UP` opt-in for monorepos** — when enabled, read-commands prefer any existing parent-directory index over nested project/VCS markers. Useful when subprojects carry their own `.git` / `Cargo.toml` / `settings.gradle` but share a root-level index. Default off — safe from accidentally-broad parent indexes (#30)
+- **Fix #25: SQL project detection** — folders containing `.sql` files now report `ProjectType::Sql` instead of `Unknown`, matching the README's advertised SQL support
+- **Gated `Time:` / `Total time:` output behind `--verbose`** — `rebuild` and `update` no longer print timing lines by default, keeping agent output clean. Pass `--verbose` to see per-phase timing
+- **Database schema now documented** — see [`docs/db-schema.md`](docs/db-schema.md) for the full ER diagram, design decisions (adjacency-list vs materialized-path, why `refs.name` is TEXT not FK), and common query patterns
+- **Smoke-test + benchmark tooling** — `scripts/smoke.sh` runs six end-to-end CLI scenarios against the release binary (including a perf-budget scenario); `scripts/check-pr.sh` chains build → tests → smoke → bench compile-check for pre-PR validation. See [`docs/smoke-testing.md`](docs/smoke-testing.md) and [`docs/benchmarks.md`](docs/benchmarks.md)
+- **Property-based parser tests** — `tests/parser_proptest.rs` exercises 5 languages × 3 properties (no-panic / determinism / line-bounds) with 64 random cases each, using `proptest = "1"`
+- **60+ new integration tests** — across `tests/files_command_tests.rs`, `tests/indexer_detection_tests.rs`, `tests/management_query_tests.rs`, `tests/zig_tests.rs`, plus inline unit tests covering MCP argv dispatch (20), format shapers (15), and root-lookup logic (15)
+- **Contributor guide** — `CLAUDE.md` at the repo root and seven focused rules under `.claude/rules/` (architecture, commands, parsers, commits, testing, release, verify) give AI coding agents a consistent spec for the codebase. Three agent profiles under `.claude/agents/` (bug-fix, research, review) encode reusable workflows
 
 ### 3.38.1
 - **Fix ambiguous paths in search output under extra roots** — when `add-root` pointed outside the primary project, `search`/`symbol`/`class`/`implementations`/`refs`/`hierarchy`/`usages` printed only the stored relative path (e.g. `src/main/java/.../BClass.java`) with no indication of which root owned it. Agents defaulted to the primary project and failed to open the file. Now, when any extra root is configured, index-backed results are resolved to absolute paths by probing each root on disk (primary first, then extras). Single-root output is unchanged
