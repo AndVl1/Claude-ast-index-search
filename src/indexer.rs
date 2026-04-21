@@ -59,6 +59,7 @@ pub enum ProjectType {
     Scala,     // Scala - build.sbt
     Matlab,    // Matlab - .m files with classdef/function
     Zig,       // Zig - build.zig, build.zig.zon
+    Sql,       // SQL - .sql files (no build-system marker, extension-only)
     Mixed,     // Multiple platforms present
     Unknown,
 }
@@ -83,6 +84,7 @@ impl ProjectType {
             ProjectType::Scala => "Scala",
             ProjectType::Matlab => "Matlab",
             ProjectType::Zig => "Zig",
+            ProjectType::Sql => "SQL",
             ProjectType::Mixed => "Mixed",
             ProjectType::Unknown => "Unknown",
         }
@@ -109,6 +111,7 @@ impl ProjectType {
             "scala" | "sbt" => Some(ProjectType::Scala),
             "matlab" | "m" => Some(ProjectType::Matlab),
             "zig" => Some(ProjectType::Zig),
+            "sql" => Some(ProjectType::Sql),
             _ => None,
         }
     }
@@ -411,11 +414,21 @@ pub fn detect_project_type(root: &Path) -> ProjectType {
     // Zig project detection: build.zig (primary) or build.zig.zon (package manifest)
     let has_zig = root.join("build.zig").exists() || root.join("build.zig.zon").exists();
 
+    // SQL project detection: no canonical build-system marker, so fall back to a
+    // .sql file in root (migrations/, schemas/, query dumps).
+    let has_sql = fs::read_dir(root)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().map(|ext| ext == "sql").unwrap_or(false))
+        })
+        .unwrap_or(false);
+
     // Count how many platforms are detected
     let count = [
         has_gradle, has_swift, has_perl, has_frontend, has_python, has_go,
         has_rust, has_bazel, has_bsl, has_csharp, has_cpp, has_dart,
-        has_php, has_ruby, has_scala, has_matlab, has_zig,
+        has_php, has_ruby, has_scala, has_matlab, has_zig, has_sql,
     ]
         .iter()
         .filter(|&&x| x)
@@ -457,6 +470,8 @@ pub fn detect_project_type(root: &Path) -> ProjectType {
         ProjectType::Matlab
     } else if has_zig {
         ProjectType::Zig
+    } else if has_sql {
+        ProjectType::Sql
     } else {
         ProjectType::Unknown
     }
