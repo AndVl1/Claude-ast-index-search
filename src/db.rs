@@ -868,6 +868,21 @@ pub fn find_implementations(
     Ok(results)
 }
 
+pub fn count_implementations(conn: &Connection, parent_name: &str) -> Result<usize> {
+    let suffix_pattern = format!("%.{}", parent_name);
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM inheritance i
+        JOIN symbols s ON i.child_id = s.id
+        WHERE i.parent_name = ?1 OR i.parent_name LIKE ?2
+        "#,
+        params![parent_name, suffix_pattern],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
+}
+
 pub fn find_implementations_scoped(
     conn: &Connection,
     parent_name: &str,
@@ -1609,6 +1624,31 @@ mod tests {
         let impls = find_implementations(&conn, "Parent", 10).unwrap();
         assert_eq!(impls.len(), 1);
         assert_eq!(impls[0].name, "Child");
+    }
+
+    #[test]
+    fn count_implementations_returns_total_above_limit() {
+        let conn = create_test_db();
+        let file_id = upsert_file(&conn, "src/model.kt", 1000, 100).unwrap();
+        for i in 0..125 {
+            let name = format!("Child{:03}", i);
+            insert_symbol(&conn, file_id, &name, SymbolKind::Class, i + 1, None).unwrap();
+            let id: i64 = conn.query_row(
+                "SELECT id FROM symbols WHERE name = ?1",
+                params![&name],
+                |row| row.get(0),
+            ).unwrap();
+            insert_inheritance(&conn, id, "BaseQueryService", "extends").unwrap();
+        }
+
+        let total = count_implementations(&conn, "BaseQueryService").unwrap();
+        assert_eq!(total, 125, "count must reflect all 125 children, regardless of any display limit");
+
+        let truncated = find_implementations(&conn, "BaseQueryService", 50).unwrap();
+        assert_eq!(truncated.len(), 50, "find_implementations honours the LIMIT");
+
+        let full = find_implementations(&conn, "BaseQueryService", 200).unwrap();
+        assert_eq!(full.len(), 125, "with sufficient limit, all children come back");
     }
 
     #[test]

@@ -415,7 +415,7 @@ pub fn cmd_refs(root: &Path, symbol: &str, limit: usize, format: &str) -> Result
 }
 
 /// Show class hierarchy (parents and children)
-pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()> {
+pub fn cmd_hierarchy(root: &Path, name: &str, limit: usize, scope: &SearchScope) -> Result<()> {
     if !db::db_exists(root) {
         println!(
             "{}",
@@ -456,11 +456,13 @@ pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()>
         }
     }
 
-    // Find children (with optional scope filtering)
+    // Find children (with optional scope filtering). Pre-scope total comes
+    // from a COUNT(*) so we can warn when display is truncated.
+    let total = db::count_implementations(&conn, name)?;
     let mut children: Vec<db::SearchResult> = if scope.is_empty() {
-        db::find_implementations(&conn, name, 50)?
+        db::find_implementations(&conn, name, limit)?
     } else {
-        let all = db::find_implementations(&conn, name, 200)?;
+        let all = db::find_implementations(&conn, name, total.max(limit))?;
         all.into_iter().filter(|s| {
             if let Some(in_file) = scope.in_file {
                 if !s.path.contains(in_file) { return false; }
@@ -472,16 +474,31 @@ pub fn cmd_hierarchy(root: &Path, name: &str, scope: &SearchScope) -> Result<()>
                 if !s.path.starts_with(prefix) { return false; }
             }
             true
-        }).collect()
+        }).take(limit).collect()
     };
     let resolver = PathResolver::from_conn(root, &conn);
     for c in &mut children {
         c.path = resolver.resolve(&c.path);
     }
     if !children.is_empty() {
-        println!("\n  {}", "Children:".cyan());
+        let header = if scope.is_empty() && total > children.len() {
+            format!("Children ({} of {} shown):", children.len(), total)
+        } else if !scope.is_empty() && children.len() == limit {
+            format!("Children (showing {}, more may exist within scope):", children.len())
+        } else {
+            format!("Children ({}):", children.len())
+        };
+        println!("\n  {}", header.cyan());
         for c in &children {
             println!("    {} [{}]: {}", c.name, c.kind, c.path);
+        }
+        if scope.is_empty() && total > children.len() {
+            println!(
+                "\n  {} use {} to see all (e.g. --limit {})",
+                "Truncated.".yellow(),
+                "--limit <N>".yellow(),
+                total
+            );
         }
     }
 

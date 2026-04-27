@@ -491,6 +491,9 @@ exclude:
 
 ## Changelog
 
+### Unreleased
+- **Fix #32: `hierarchy` silently truncates at 50** — `ast-index hierarchy "BaseQueryService"` returned only the first 50 children alphabetically (e.g. A → E), losing 60% of real subclasses on a hierarchy of 125 with no warning. The command now accepts `--limit <N>` (default 200), reports the total count alongside the displayed slice (`Children (50 of 125 shown)`), and prints a yellow `Truncated.` hint with the exact `--limit` value needed to see all results
+
 ### 3.39.0
 - **Zig language support** — tree-sitter based parser with `.zig` and `.zon` extensions, `ProjectType::Zig` auto-detection via `build.zig` / `build.zig.zon`, integration test covering fn/struct/field/test-block symbol extraction
 - **MCP server expanded to 20 tools** — added `symbol`, `class`, `hierarchy`, `imports`, `api`, `changed`, `module`, `deps`, `dependents`, `call_tree` on top of the original 10. Covers precise symbol lookup, file context, module-level navigation, and code-review workflows without requiring multiple `ast-index` command shells. See [`docs/mcp-setup.md`](docs/mcp-setup.md)
