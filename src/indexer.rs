@@ -1477,6 +1477,12 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
 
     let gradle_project_re = &*GRADLE_PROJECT_RE;
 
+    // Custom DSL style: deps(project(":path"), project(":other")) - used in Forma-like Gradle DSLs
+    // Matches project(":path") inside deps(...) blocks
+    static DEPS_PROJECT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)project\s*\(\s*["']([^"']+)["']\s*\)"#).unwrap());
+
+    let deps_project_re = &*DEPS_PROJECT_RE;
+
     // ya.make PEERDIR(...) — accepts one or more whitespace-separated paths
     static PEERDIR_RE: LazyLock<Regex> = LazyLock::new(||
         Regex::new(r"(?s)PEERDIR\s*\(\s*([^)]*)\s*\)").unwrap()
@@ -1681,6 +1687,15 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
                         let dep_name = dep_path.trim_start_matches(':').replace(':', ".");
                         if let Some(&dep_id) = module_ids.get(&dep_name) {
                             dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
+                            dep_count += 1;
+                        }
+                    }
+                    // Parse deps(project(":path")) style - used in Forma and similar Gradle DSLs
+                    for caps in deps_project_re.captures_iter(&content) {
+                        let dep_path = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                        let dep_name = dep_path.trim_start_matches(':').replace(':', ".");
+                        if let Some(&dep_id) = module_ids.get(&dep_name) {
+                            dep_stmt.execute(rusqlite::params![module_id, dep_id, "implementation"])?;
                             dep_count += 1;
                         }
                     }
