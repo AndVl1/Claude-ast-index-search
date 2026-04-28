@@ -1472,8 +1472,11 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
 
     let projects_dep_re = &*PROJECTS_DEP_RE;
 
-    // Standard Gradle style: implementation(project(":features:payments:api"))
-    static GRADLE_PROJECT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)(api|implementation|compileOnly|testImplementation)\s*\(\s*project\s*\(\s*["']:([^"']+)["']\s*\)"#).unwrap());
+    // Gradle project(...) deps: implementation(project(":features:payments:api"))
+    // Also matches custom DSL wrappers like deps(project(":path")) used in Forma-like Gradle DSLs.
+    // See https://github.com/formatools/forma for the Forma DSL.
+    // Capture group 1 is the configuration/wrapper identifier; the leading `:` on the path is optional.
+    static GRADLE_PROJECT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)\b(\w+)\s*\(\s*project\s*\(\s*["']:?([^"']+)["']\s*\)"#).unwrap());
 
     let gradle_project_re = &*GRADLE_PROJECT_RE;
 
@@ -3014,6 +3017,110 @@ mod tests {
         let dep_names: Vec<String> = deps.iter().map(|(n, _, _)| n.clone()).collect();
         assert!(dep_names.contains(&"lib/a".to_string()));
         assert!(dep_names.contains(&"lib/b".to_string()));
+    }
+
+    #[test]
+    fn test_index_deps_gradle_standard_and_forma() {
+        // Two consumer modules in one fixture:
+        //   * feature/login uses the canonical Gradle `dependencies { implementation(project(...)) }`
+        //   * feature/profile uses the Forma-style `androidLibrary(dependencies = deps(...) + deps(project(...)))`
+        // Each consumer also lists external accessors (google.material, androidx.appcompat,
+        // test.junit, test.espresso) to confirm the regex does not false-match non-project entries.
+        // module_deps has no UNIQUE constraint, so the regex must produce exactly one edge per
+        // declaration — a previous version with two overlapping patterns silently doubled
+        // standard-form edges.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        for sub in &["core/network", "core/database", "feature/login", "feature/profile"] {
+            fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        // Leaf targets — empty build files so they only register as modules.
+        fs::write(root.join("core/network/build.gradle.kts"), "").unwrap();
+        fs::write(root.join("core/database/build.gradle.kts"), "").unwrap();
+
+        // Standard Gradle consumer.
+        fs::write(
+            root.join("feature/login/build.gradle.kts"),
+            r#"
+            plugins {
+                id("com.android.library")
+                kotlin("android")
+            }
+            dependencies {
+                implementation(project(":core:network"))
+                implementation("androidx.appcompat:appcompat:1.6.1")
+                testImplementation("junit:junit:4.13.2")
+            }
+            "#,
+        )
+        .unwrap();
+
+        // Forma DSL consumer — mirrors the syntax shown in the Forma README
+        // (https://github.com/formatools/forma): `dependencies = deps(...) + deps(project(...))`,
+        // plus testDependencies/androidTestDependencies.
+        fs::write(
+            root.join("feature/profile/build.gradle.kts"),
+            r#"
+            androidLibrary(
+                packageName = "tools.forma.sample.profile",
+                dependencies = deps(
+                    google.material,
+                    androidx.appcompat,
+                ) + deps(
+                    project(":core:database"),
+                ),
+                testDependencies = deps(
+                    test.junit,
+                ),
+                androidTestDependencies = deps(
+                    test.espresso,
+                ),
+            )
+            "#,
+        )
+        .unwrap();
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let files = vec![
+            root.join("core/network/build.gradle.kts"),
+            root.join("core/database/build.gradle.kts"),
+            root.join("feature/login/build.gradle.kts"),
+            root.join("feature/profile/build.gradle.kts"),
+        ];
+        index_modules_from_files(&conn, root, &files).unwrap();
+        let dep_count = index_module_dependencies(&mut conn, root, &files, false).unwrap();
+
+        // feature.login — exactly one internal edge to core.network via standard Gradle DSL.
+        let login_deps = get_module_deps(&conn, "feature.login").unwrap();
+        let login_names: Vec<&str> = login_deps.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(
+            login_names,
+            vec!["core.network"],
+            "feature.login: expected only [core.network], got {:?}",
+            login_names
+        );
+        assert_eq!(login_deps[0].2, "implementation", "feature.login dep_kind mismatch: {:?}", login_deps[0]);
+
+        // feature.profile — exactly one internal edge to core.database via Forma deps(project(...)).
+        // External accessors (google.material, androidx.appcompat, test.junit, test.espresso)
+        // must not appear; they have no `project(...)` wrapper and no matching module exists.
+        let profile_deps = get_module_deps(&conn, "feature.profile").unwrap();
+        let profile_names: Vec<&str> = profile_deps.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(
+            profile_names,
+            vec!["core.database"],
+            "feature.profile: expected only [core.database], got {:?}",
+            profile_names
+        );
+
+        // Two consumers × one internal dep each = 2 total edges, with no duplicates.
+        assert_eq!(dep_count, 2, "expected dep_count == 2, got {}", dep_count);
+        let total_edges: i64 = conn
+            .query_row("SELECT COUNT(*) FROM module_deps", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total_edges, 2, "module_deps row count mismatch — duplicate edge inserted?");
     }
 
     #[test]
