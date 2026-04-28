@@ -492,6 +492,9 @@ exclude:
 
 ## Changelog
 
+### 3.40.1
+- **Parse custom Gradle DSL `<wrapper>(project(":path"))` dependencies (#33)** — previously the indexer only recognised `api`/`implementation`/`compileOnly`/`testImplementation` as dependency configurations. Custom DSLs that wrap `project(...)` under a different identifier (e.g. Forma's `deps(project(":foo"))`, `kapt(project(...))`, `classpath(project(":buildSrc"))`) were silently ignored. The Gradle parser now accepts any `<word>(project(":path"))` form, so `ast-index deps` / `dependents` / `module` correctly cover Android projects on custom DSLs. Thanks to @AndVl1 for the fix
+
 ### 3.40.0
 - **CSS / SCSS / PCSS / Less language support** — tree-sitter based parsers for `.css`, `.pcss`, `.postcss` (via the CSS grammar), `.scss`, and `.less`. Indexed: class selectors (`.foo`), id selectors (`#bar`), CSS custom properties (`--var`), SCSS variables (`$primary`), Less variables (`@brand`), `@mixin`/`@function`/`%placeholder` (SCSS), `.mixin()` definitions (Less), `@keyframes`, and `@import`/`@use`/`@forward` paths. `ast-index file` walks the new extensions automatically. FTS5 tokenization treats `$`, `@`, `--`, `%` as separators, so `search primary` finds `$primary` and `search brand` finds `@brand`
 - **Fix #32: `hierarchy` silently truncates at 50** — `ast-index hierarchy "BaseQueryService"` returned only the first 50 children alphabetically (e.g. A → E), losing 60% of real subclasses on a hierarchy of 125 with no warning. The command now accepts `--limit <N>` (default 200), reports the total count alongside the displayed slice (`Children (50 of 125 shown)`), and prints a yellow `Truncated.` hint with the exact `--limit` value needed to see all results
