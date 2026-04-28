@@ -1472,16 +1472,12 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
 
     let projects_dep_re = &*PROJECTS_DEP_RE;
 
-    // Standard Gradle style: implementation(project(":features:payments:api"))
-    static GRADLE_PROJECT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)(api|implementation|compileOnly|testImplementation)\s*\(\s*project\s*\(\s*["']:([^"']+)["']\s*\)"#).unwrap());
+    // Gradle project(...) deps: implementation(project(":features:payments:api"))
+    // Also matches custom DSL wrappers like deps(project(":path")) used in Forma-like Gradle DSLs.
+    // Capture group 1 is the configuration/wrapper identifier; the leading `:` on the path is optional.
+    static GRADLE_PROJECT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)\b(\w+)\s*\(\s*project\s*\(\s*["']:?([^"']+)["']\s*\)"#).unwrap());
 
     let gradle_project_re = &*GRADLE_PROJECT_RE;
-
-    // Custom DSL style: deps(project(":path"), project(":other")) - used in Forma-like Gradle DSLs
-    // Matches project(":path") inside deps(...) blocks
-    static DEPS_PROJECT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)project\s*\(\s*["']([^"']+)["']\s*\)"#).unwrap());
-
-    let deps_project_re = &*DEPS_PROJECT_RE;
 
     // ya.make PEERDIR(...) — accepts one or more whitespace-separated paths
     static PEERDIR_RE: LazyLock<Regex> = LazyLock::new(||
@@ -1687,15 +1683,6 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
                         let dep_name = dep_path.trim_start_matches(':').replace(':', ".");
                         if let Some(&dep_id) = module_ids.get(&dep_name) {
                             dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
-                            dep_count += 1;
-                        }
-                    }
-                    // Parse deps(project(":path")) style - used in Forma and similar Gradle DSLs
-                    for caps in deps_project_re.captures_iter(&content) {
-                        let dep_path = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                        let dep_name = dep_path.trim_start_matches(':').replace(':', ".");
-                        if let Some(&dep_id) = module_ids.get(&dep_name) {
-                            dep_stmt.execute(rusqlite::params![module_id, dep_id, "implementation"])?;
                             dep_count += 1;
                         }
                     }
@@ -3029,6 +3016,57 @@ mod tests {
         let dep_names: Vec<String> = deps.iter().map(|(n, _, _)| n.clone()).collect();
         assert!(dep_names.contains(&"lib/a".to_string()));
         assert!(dep_names.contains(&"lib/b".to_string()));
+    }
+
+    #[test]
+    fn test_index_deps_gradle_custom_dsl() {
+        // Custom DSL wrappers like deps(project(":foo")) used in Forma-like Gradle setups
+        // must be matched, but standard implementation(project(":foo")) MUST NOT produce
+        // a duplicate edge — module_deps has no UNIQUE constraint, so a regex that double-matches
+        // would silently inflate dependent counts.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("core/api")).unwrap();
+        fs::create_dir_all(root.join("core/impl")).unwrap();
+        fs::create_dir_all(root.join("feature/login")).unwrap();
+        fs::write(root.join("core/api/build.gradle.kts"), "").unwrap();
+        fs::write(root.join("core/impl/build.gradle.kts"), "").unwrap();
+        // Mix of custom DSL `deps(project(...))` and standard `implementation(project(...))`.
+        // The standard form must contribute exactly one edge, not two.
+        fs::write(
+            root.join("feature/login/build.gradle.kts"),
+            r#"
+            plugins { id("forma") }
+            deps(
+                project(":core:api"),
+            )
+            dependencies {
+                implementation(project(":core:impl"))
+            }
+            "#,
+        )
+        .unwrap();
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let files = vec![
+            root.join("core/api/build.gradle.kts"),
+            root.join("core/impl/build.gradle.kts"),
+            root.join("feature/login/build.gradle.kts"),
+        ];
+        index_modules_from_files(&conn, root, &files).unwrap();
+        let dep_count = index_module_dependencies(&mut conn, root, &files, false).unwrap();
+
+        let deps = get_module_deps(&conn, "feature.login").unwrap();
+        let dep_names: Vec<String> = deps.iter().map(|(n, _, _)| n.clone()).collect();
+        assert!(dep_names.contains(&"core.api".to_string()), "deps(project(...)) not parsed: {:?}", dep_names);
+        assert!(dep_names.contains(&"core.impl".to_string()), "implementation(project(...)) not parsed: {:?}", dep_names);
+
+        let impl_count = dep_names.iter().filter(|n| *n == "core.impl").count();
+        assert_eq!(impl_count, 1, "implementation(project(...)) duplicated: {:?}", dep_names);
+        assert_eq!(deps.len(), 2, "expected exactly 2 deps, got {:?}", deps);
+        assert_eq!(dep_count, 2, "dep_count mismatch");
     }
 
     #[test]
