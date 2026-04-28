@@ -118,6 +118,7 @@ dependencies = [
  "tree-sitter-c-sharp",
  "tree-sitter-commonlisp",
  "tree-sitter-cpp",
+ "tree-sitter-css",
  "tree-sitter-dart-orchard",
  "tree-sitter-elixir",
  "tree-sitter-gdscript",
@@ -125,6 +126,7 @@ dependencies = [
  "tree-sitter-groovy",
  "tree-sitter-java",
  "tree-sitter-kotlin-ng",
+ "tree-sitter-less",
  "tree-sitter-lua",
  "tree-sitter-matlab",
  "tree-sitter-objc",
@@ -135,6 +137,7 @@ dependencies = [
  "tree-sitter-ruby",
  "tree-sitter-rust",
  "tree-sitter-scala",
+ "tree-sitter-scss",
  "tree-sitter-sql",
  "tree-sitter-swift",
  "tree-sitter-typescript",
@@ -1438,6 +1441,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-css"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-dart-orchard"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1512,6 +1525,16 @@ name = "tree-sitter-language"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
+
+[[package]]
+name = "tree-sitter-less"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66d4fd0af04a7338929f0e27ca078b4831de8e1ebf90ce8182e69012094a0ae0"
+dependencies = [
+ "cc",
+ "tree-sitter 0.26.5",
+]
 
 [[package]]
 name = "tree-sitter-lua"
@@ -1611,6 +1634,16 @@ checksum = "7516aeb3d1f40ede8e3045b163e86993b3434514dd06c34c0b75e782d9a0b251"
 dependencies = [
  "cc",
  "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-scss"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33909a9ca86390ebbf3461e9949c4bbe2767d2d024b486306d27616641d4ba24"
+dependencies = [
+ "cc",
+ "tree-sitter 0.26.5",
 ]
 
 [[package]]

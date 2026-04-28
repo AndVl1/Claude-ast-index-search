@@ -447,6 +447,9 @@ pub enum FileType {
     R,
     Sql,
     Zig,
+    Css,
+    Scss,
+    Less,
 }
 
 impl FileType {
@@ -483,6 +486,9 @@ impl FileType {
             "groovy" | "gradle" => Some(FileType::Groovy),
             "r" | "R" => Some(FileType::R),
             "zig" | "zon" => Some(FileType::Zig),
+            "css" | "pcss" | "postcss" => Some(FileType::Css),
+            "scss" => Some(FileType::Scss),
+            "less" => Some(FileType::Less),
             _ => None,
         }
     }
@@ -619,6 +625,10 @@ fn strip_comments(content: &str, file_type: FileType) -> String {
         FileType::Sql => strip_c_comments(content, false),
         // Zig: only // line comments — no block comments in the language.
         FileType::Zig => strip_line_comments(content),
+        // CSS: only /* */ block comments. SCSS / Less also support // line
+        // comments. Tree-sitter handles them natively; this fallback runs
+        // only for non-tree-sitter paths (refs / search) and is safe.
+        FileType::Css | FileType::Scss | FileType::Less => strip_c_comments(content, false),
 
         // Vue/Svelte: comments stripped after script extraction
         // Common Lisp: tree-sitter handles comments natively (unreachable)

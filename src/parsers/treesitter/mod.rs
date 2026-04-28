@@ -8,6 +8,7 @@ pub mod bsl;
 pub mod common_lisp;
 pub mod cpp;
 pub mod csharp;
+pub mod css;
 pub mod dart;
 pub mod elixir;
 pub mod gdscript;
@@ -15,6 +16,7 @@ pub mod go;
 pub mod groovy;
 pub mod java;
 pub mod kotlin;
+pub mod less;
 pub mod lua;
 pub mod matlab;
 pub mod objc;
@@ -25,6 +27,7 @@ pub mod r_lang;
 pub mod ruby;
 pub mod rust_lang;
 pub mod scala;
+pub mod scss;
 pub mod sql;
 pub mod swift;
 pub mod typescript;
@@ -66,6 +69,7 @@ pub fn get_treesitter_parser(file_type: FileType) -> Option<&'static dyn Languag
         FileType::CommonLisp => Some(&common_lisp::COMMON_LISP_PARSER),
         FileType::Cpp => Some(&cpp::CPP_PARSER),
         FileType::CSharp => Some(&csharp::CSHARP_PARSER),
+        FileType::Css => Some(&css::CSS_PARSER),
         FileType::Dart => Some(&dart::DART_PARSER),
         FileType::Elixir => Some(&elixir::ELIXIR_PARSER),
         FileType::Gdscript => Some(&gdscript::GDSCRIPT_PARSER),
@@ -73,6 +77,7 @@ pub fn get_treesitter_parser(file_type: FileType) -> Option<&'static dyn Languag
         FileType::Groovy => Some(&groovy::GROOVY_PARSER),
         FileType::Java => Some(&java::JAVA_PARSER),
         FileType::Kotlin => Some(&kotlin::KOTLIN_PARSER),
+        FileType::Less => Some(&less::LESS_PARSER),
         FileType::Lua => Some(&lua::LUA_PARSER),
         FileType::Matlab => Some(&matlab::MATLAB_PARSER),
         FileType::ObjC => Some(&objc::OBJC_PARSER),
@@ -83,6 +88,7 @@ pub fn get_treesitter_parser(file_type: FileType) -> Option<&'static dyn Languag
         FileType::Ruby => Some(&ruby::RUBY_PARSER),
         FileType::Rust => Some(&rust_lang::RUST_PARSER),
         FileType::Scala => Some(&scala::SCALA_PARSER),
+        FileType::Scss => Some(&scss::SCSS_PARSER),
         FileType::Sql => Some(&sql::SQL_PARSER),
         FileType::Swift => Some(&swift::SWIFT_PARSER),
         FileType::TypeScript => Some(&typescript::TYPESCRIPT_PARSER),

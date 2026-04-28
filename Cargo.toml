@@ -70,6 +70,9 @@ fs2 = "0.4.3"
 tree-sitter-commonlisp = "0.4.1"
 tree-sitter-gdscript = "6.1"
 tree-sitter-zig = "1.1"
+tree-sitter-css = "0.25"
+tree-sitter-scss = "1.0"
+tree-sitter-less = "1.0"
 
 [build-dependencies]
 cc = "1"
