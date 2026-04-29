@@ -3148,6 +3148,81 @@ mod tests {
     }
 
     #[test]
+    fn test_index_deps_gradle_forma_multi_project_per_block() {
+        // Real-world Forma layout: a single `deps(...)` block declares many `project(...)` entries
+        // separated by other deps and newlines. The wrapper-anchored regex
+        // `\b(\w+)\s*\(\s*project\s*\(` only fires once per `deps(` (on the first project),
+        // so without the project-only fallback the second and third project edges are silently
+        // dropped — manifesting as a huge undercount on `ast-index dependents`.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        for sub in &[
+            "api/callback",
+            "api/dto-common",
+            "api/third",
+            "feature/payments",
+        ] {
+            fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        fs::write(root.join("api/callback/build.gradle.kts"), "").unwrap();
+        fs::write(root.join("api/dto-common/build.gradle.kts"), "").unwrap();
+        fs::write(root.join("api/third/build.gradle.kts"), "").unwrap();
+
+        fs::write(
+            root.join("feature/payments/build.gradle.kts"),
+            r#"
+            androidLibrary(
+                packageName = "tools.forma.sample.payments",
+                dependencies = deps(
+                    aar(Deps.Files.tapandpay),
+                    aar(Deps.Files.saverification),
+                ) + deps(
+                    Deps.Libraries.rxJava,
+                    Deps.Libraries.rxKotlin,
+                ) + deps(
+                    project(":api:callback"),
+                    project(":api:dto-common"),
+                    project(":api:third"),
+                ),
+            )
+            "#,
+        )
+        .unwrap();
+
+        let mut conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let files = vec![
+            root.join("api/callback/build.gradle.kts"),
+            root.join("api/dto-common/build.gradle.kts"),
+            root.join("api/third/build.gradle.kts"),
+            root.join("feature/payments/build.gradle.kts"),
+        ];
+        index_modules_from_files(&conn, root, &files).unwrap();
+        let dep_count = index_module_dependencies(&mut conn, root, &files, false).unwrap();
+
+        let payments_deps = get_module_deps(&conn, "feature.payments").unwrap();
+        let mut payments_names: Vec<&str> =
+            payments_deps.iter().map(|(n, _, _)| n.as_str()).collect();
+        payments_names.sort();
+        assert_eq!(
+            payments_names,
+            vec!["api.callback", "api.dto-common", "api.third"],
+            "feature.payments: expected all three project() edges, got {:?}",
+            payments_names
+        );
+        assert_eq!(dep_count, 3, "expected dep_count == 3, got {}", dep_count);
+
+        let total_edges: i64 = conn
+            .query_row("SELECT COUNT(*) FROM module_deps", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            total_edges, 3,
+            "module_deps row count mismatch — duplicate or missing edge"
+        );
+    }
+
+    #[test]
     fn test_index_deps_python_pyproject() {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
