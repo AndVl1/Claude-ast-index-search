@@ -492,6 +492,10 @@ exclude:
 
 ## Changelog
 
+### 3.40.2
+- **Fix Windows release build broken by tree-sitter-scss 1.0.0** — the published crate hardcodes `-Wno-unused-parameter` in `build.rs`, which MSVC `cl.exe` rejects with `error D8021: invalid numeric argument`, killing the entire Windows + matrix build (v3.40.0 and v3.40.1 release artifacts never published). Upstream master has the platform-conditional fix from 2024-04-26 but never cut a 1.0.1; pinned via `[patch.crates-io]` to that commit
+- **Bump GitHub Actions to non-deprecated versions** — `actions/checkout@v4 → v6`, `actions/setup-node@v4 → v6`, `actions/upload-artifact@v4 → v7`, `actions/download-artifact@v4 → v7`. Silences Node.js 20 deprecation warnings (Node.js 20 is removed from runners on September 16th, 2026)
+
 ### 3.40.1
 - **Parse custom Gradle DSL `<wrapper>(project(":path"))` dependencies (#33)** — previously the indexer only recognised `api`/`implementation`/`compileOnly`/`testImplementation` as dependency configurations. Custom DSLs that wrap `project(...)` under a different identifier (e.g. Forma's `deps(project(":foo"))`, `kapt(project(...))`, `classpath(project(":buildSrc"))`) were silently ignored. The Gradle parser now accepts any `<word>(project(":path"))` form, so `ast-index deps` / `dependents` / `module` correctly cover Android projects on custom DSLs. Thanks to @AndVl1 for the fix
 
