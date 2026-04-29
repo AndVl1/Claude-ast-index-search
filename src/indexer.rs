@@ -1473,12 +1473,18 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
     let projects_dep_re = &*PROJECTS_DEP_RE;
 
     // Gradle project(...) deps: implementation(project(":features:payments:api"))
-    // Also matches custom DSL wrappers like deps(project(":path")) used in Forma-like Gradle DSLs.
-    // See https://github.com/formatools/forma for the Forma DSL.
+    // Matches patterns like: implementation(project(":path")) or deps(project(":path"))
     // Capture group 1 is the configuration/wrapper identifier; the leading `:` on the path is optional.
     static GRADLE_PROJECT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)\b(\w+)\s*\(\s*project\s*\(\s*["']:?([^"']+)["']\s*\)"#).unwrap());
 
     let gradle_project_re = &*GRADLE_PROJECT_RE;
+
+    // Fallback: match any project(":path") declaration regardless of wrapper.
+    // This catches Forma-style deps where project() is mixed with other dependency types.
+    // See https://github.com/formatools/forma for the Forma DSL.
+    static PROJECT_ONLY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?m)project\s*\(\s*["']:?([^"']+)["']\s*\)"#).unwrap());
+
+    let project_only_re = &*PROJECT_ONLY_RE;
 
     // ya.make PEERDIR(...) — accepts one or more whitespace-separated paths
     static PEERDIR_RE: LazyLock<Regex> = LazyLock::new(||
@@ -1670,12 +1676,16 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
                 }
                 _ => {
                     // Gradle
+                    // Track inserted deps to avoid duplicates from overlapping regex patterns
+                    let mut inserted: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
                     for caps in projects_dep_re.captures_iter(&content) {
                         let dep_kind = caps.get(1).map(|m| m.as_str()).unwrap_or("implementation");
                         let dep_name = caps.get(2).map(|m| m.as_str()).unwrap_or("");
                         if let Some(&dep_id) = module_ids.get(dep_name) {
-                            dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
-                            dep_count += 1;
+                            if inserted.insert((module_id, dep_id)) {
+                                dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
+                                dep_count += 1;
+                            }
                         }
                     }
                     for caps in gradle_project_re.captures_iter(&content) {
@@ -1683,8 +1693,22 @@ pub fn index_module_dependencies(conn: &mut Connection, root: &Path, gradle_file
                         let dep_path = caps.get(2).map(|m| m.as_str()).unwrap_or("");
                         let dep_name = dep_path.trim_start_matches(':').replace(':', ".");
                         if let Some(&dep_id) = module_ids.get(&dep_name) {
-                            dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
-                            dep_count += 1;
+                            if inserted.insert((module_id, dep_id)) {
+                                dep_stmt.execute(rusqlite::params![module_id, dep_id, dep_kind])?;
+                                dep_count += 1;
+                            }
+                        }
+                    }
+                    // Fallback: catch project(":path") not matched by main regex
+                    // (e.g., when other deps are between deps( and project())
+                    for caps in project_only_re.captures_iter(&content) {
+                        let dep_path = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                        let dep_name = dep_path.trim_start_matches(':').replace(':', ".");
+                        if let Some(&dep_id) = module_ids.get(&dep_name) {
+                            if inserted.insert((module_id, dep_id)) {
+                                dep_stmt.execute(rusqlite::params![module_id, dep_id, "implementation"])?;
+                                dep_count += 1;
+                            }
                         }
                     }
                 }
