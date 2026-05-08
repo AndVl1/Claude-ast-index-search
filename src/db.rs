@@ -15,6 +15,14 @@ fn normalize_root(project_root: &Path) -> String {
         .into_owned()
 }
 
+/// Cache namespace (subdir under platform cache root). Override via env to
+/// isolate forks/experimental builds from the upstream cache, e.g. when
+/// testing schema-incompatible changes.
+fn cache_namespace() -> String {
+    std::env::var("AST_INDEX_CACHE_NAMESPACE")
+        .unwrap_or_else(|_| "ast-index".to_string())
+}
+
 /// Get the database path for the current project
 pub fn get_db_path(project_root: &Path) -> Result<PathBuf> {
     // Check env: new name first, fallback to old
@@ -26,7 +34,7 @@ pub fn get_db_path(project_root: &Path) -> Result<PathBuf> {
 
     let cache_dir = dirs::cache_dir()
         .context("Could not find cache directory")?
-        .join("ast-index");
+        .join(cache_namespace());
 
     let normalized = normalize_root(project_root);
 
@@ -121,7 +129,7 @@ pub fn migrate_legacy_project(project_root: &Path) {
     };
     let project_hash = simple_hash(project_root.to_string_lossy().as_ref());
     let old_db_dir = cache_dir.join("kotlin-index").join(&project_hash);
-    let new_db_dir = cache_dir.join("ast-index").join(&project_hash);
+    let new_db_dir = cache_dir.join(cache_namespace()).join(&project_hash);
 
     if !old_db_dir.exists() || new_db_dir.join("index.db").exists() {
         return;
