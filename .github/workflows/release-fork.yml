@@ -16,9 +16,15 @@ name: Fork Release (ast-index-av)
 # sets `AST_INDEX_CACHE_NAMESPACE=ast-index-av` before exec'ing the real
 # binary. SQLite cache lands at `~/Library/Caches/ast-index-av/` instead
 # of the upstream `~/Library/Caches/ast-index/`, so schema-incompatible
-# changes on the fork stay isolated. Requires the binary to ship with
-# AST_INDEX_CACHE_NAMESPACE support (PR #3 / commit deb3a6a-equivalent on
-# the fork's main).
+# changes on the fork stay isolated.
+#
+# Versioning: workflow reads the SemVer base from `Cargo.toml` (e.g.
+# `3.40.4`) and appends `-av.<counter>`. Counter is auto-managed by
+# `einaregilsson/build-number@v3` — stored in repo refs and incremented
+# per run, monotonic across all fork releases (no resets when base bumps,
+# never collides with a prior tag). Optional `counter_override` input
+# pins a specific N (skips auto-increment); useful for re-running a
+# failed release on the same tag.
 #
 # Known cosmetic limitations:
 #   - `ast-index-av --help` prints `ast-index` (clap command name baked
@@ -36,8 +42,10 @@ name: Fork Release (ast-index-av)
 #
 # Usage:
 #   - Run from Actions tab → "Fork Release (ast-index-av)" → Run workflow.
-#   - Provide `version` input as SemVer prerelease, e.g. `3.40.2-av.1`.
-#   - Workflow creates tag `v<version>` (e.g. `v3.40.2-av.1`), uploads
+#   - Counter auto-increments. Optionally pass `counter_override` to pin
+#     a specific N (e.g. to retry a failed release).
+#   - Workflow derives `version = <Cargo.toml-version>-av.<counter>`
+#     and creates tag `v<version>` (e.g. `v3.40.4-av.1`), uploads
 #     5-platform artifacts named `ast-index-av-...`, creates a GitHub
 #     Release on the fork marked as prerelease, and updates the tap.
 #
@@ -48,10 +56,11 @@ name: Fork Release (ast-index-av)
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Fork release version, X.Y.Z-av.N (e.g. 3.40.2-av.1). Tag will be v<version>.'
-        required: true
+      counter_override:
+        description: 'Optional. Pin counter N (positive int). Empty = auto-increment via einaregilsson/build-number.'
+        required: false
         type: string
+        default: ''
       dry_run:
         description: 'Build artifacts but do not create release / push tap'
         required: false
@@ -59,32 +68,64 @@ on:
         default: false
 
 env:
-  # Version input already carries the `-av.N` prerelease suffix
-  # (e.g. 3.40.2-av.1), so the tag is just `v<version>` — no doubling.
-  RELEASE_TAG: v${{ github.event.inputs.version }}
-  RELEASE_VERSION: ${{ github.event.inputs.version }}
   PRODUCT_NAME: ast-index-av
 
 permissions:
   contents: write
 
 jobs:
-  validate:
-    name: Validate inputs
+  resolve-version:
+    name: Resolve version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      tag: ${{ steps.derive.outputs.tag }}
     steps:
-      - name: Check version format
+      - uses: actions/checkout@v6
+
+      - name: Auto-increment build number
+        id: buildnumber
+        if: ${{ github.event.inputs.counter_override == '' }}
+        uses: einaregilsson/build-number@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prefix: ast-index-av
+
+      - name: Derive version from Cargo.toml + counter
+        id: derive
+        env:
+          OVERRIDE: ${{ github.event.inputs.counter_override }}
+          AUTO_COUNTER: ${{ steps.buildnumber.outputs.build_number }}
         run: |
-          if ! echo "${{ env.RELEASE_VERSION }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-av\.[0-9]+$'; then
-            echo "::error::Invalid version '${{ env.RELEASE_VERSION }}'. Expected X.Y.Z-av.N (SemVer prerelease)."
+          if [ -n "$OVERRIDE" ]; then
+            counter="$OVERRIDE"
+            source="override"
+          else
+            counter="$AUTO_COUNTER"
+            source="auto (einaregilsson/build-number)"
+          fi
+          if ! echo "$counter" | grep -qE '^[0-9]+$'; then
+            echo "::error::Counter must be a positive integer (got '$counter' from $source)."
             exit 1
           fi
-          echo "Release tag will be: ${{ env.RELEASE_TAG }}"
+          base=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)
+          if ! echo "$base" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Cargo.toml version '$base' is not in X.Y.Z form."
+            exit 1
+          fi
+          version="${base}-av.${counter}"
+          tag="v${version}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved: base=$base counter=$counter source=$source version=$version tag=$tag"
 
   build:
     name: Build ${{ matrix.name }}
-    needs: validate
+    needs: resolve-version
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ needs.resolve-version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
     strategy:
       matrix:
         include:
@@ -141,9 +182,12 @@ jobs:
 
   release:
     name: Create Fork Release
-    needs: build
+    needs: [resolve-version, build]
     if: ${{ github.event.inputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.resolve-version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -177,9 +221,12 @@ jobs:
 
   update-homebrew:
     name: Update fork Homebrew tap
-    needs: release
+    needs: [resolve-version, release]
     if: ${{ github.event.inputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.resolve-version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
     steps:
       - name: Download archives and compute sha256
         id: sha
