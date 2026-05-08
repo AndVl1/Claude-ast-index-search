@@ -7,18 +7,30 @@ name: Fork Release (ast-index-av)
 # `release.yml` workflow so that syncing tags from upstream cannot
 # accidentally publish a fork release.
 #
+# Branding strategy: the binary is built as `ast-index` (no Cargo.toml
+# drift from upstream — keeps `git pull upstream main` clean) and renamed
+# to `ast-index-av` only at packaging time. The Homebrew formula installs
+# it as `ast-index-av`, so users get a separate command on PATH.
+#
+# Known cosmetic limitations:
+#   - `ast-index-av --help` prints `ast-index` (clap command name baked
+#     into source). Acceptable for testing.
+#   - Cache dir `~/Library/Caches/ast-index/` is shared with upstream.
+#     SQLite schema is normally compatible, but rebuild the index after
+#     switching versions if you see stale data.
+#
 # Prerequisites (one-time setup):
 #   1. Create empty repo `AndVl1/homebrew-ast-index-av` with `Formula/`
 #      directory.
 #   2. Add fork repo secret `HOMEBREW_TAP_TOKEN` — a fine-grained PAT
 #      with contents:write on `AndVl1/homebrew-ast-index-av`.
-#   3. (Optional) Add `NPM_TOKEN` if NPM publishing is later enabled.
 #
 # Usage:
 #   - Run from Actions tab → "Fork Release (ast-index-av)" → Run workflow.
-#   - Provide `version` input, e.g. `3.40.2-av.1`.
-#   - Workflow creates tag `v<version>-av`, uploads 5-platform artifacts,
-#     creates a GitHub Release on the fork, and updates the homebrew tap.
+#   - Provide `version` input as SemVer prerelease, e.g. `3.40.2-av.1`.
+#   - Workflow creates tag `v<version>-av`, uploads 5-platform artifacts
+#     named `ast-index-av-...`, creates a GitHub Release on the fork
+#     marked as prerelease, and updates the homebrew tap.
 
 on:
   workflow_dispatch:
@@ -36,6 +48,7 @@ on:
 env:
   RELEASE_TAG: v${{ github.event.inputs.version }}-av
   RELEASE_VERSION: ${{ github.event.inputs.version }}
+  PRODUCT_NAME: ast-index-av
 
 permissions:
   contents: write
@@ -47,8 +60,8 @@ jobs:
     steps:
       - name: Check version format
         run: |
-          if ! echo "${{ env.RELEASE_VERSION }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-            echo "::error::Invalid version '${{ env.RELEASE_VERSION }}'. Expected SemVer X.Y.Z[-prerelease]."
+          if ! echo "${{ env.RELEASE_VERSION }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-av\.[0-9]+$'; then
+            echo "::error::Invalid version '${{ env.RELEASE_VERSION }}'. Expected X.Y.Z-av.N (SemVer prerelease)."
             exit 1
           fi
           echo "Release tag will be: ${{ env.RELEASE_TAG }}"
@@ -91,23 +104,25 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (unix)
+      - name: Rename + package (unix)
         if: matrix.name != 'windows-x86_64'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../ast-index-${{ env.RELEASE_TAG }}-${{ matrix.name }}.tar.gz ast-index
+          cp ast-index ${{ env.PRODUCT_NAME }}
+          tar -czvf ../../../${{ env.PRODUCT_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.name }}.tar.gz ${{ env.PRODUCT_NAME }}
 
-      - name: Package (windows)
+      - name: Rename + package (windows)
         if: matrix.name == 'windows-x86_64'
         shell: pwsh
         run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/ast-index.exe" -DestinationPath "ast-index-${{ env.RELEASE_TAG }}-${{ matrix.name }}.zip"
+          Copy-Item "target/${{ matrix.target }}/release/ast-index.exe" "target/${{ matrix.target }}/release/${{ env.PRODUCT_NAME }}.exe"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ env.PRODUCT_NAME }}.exe" -DestinationPath "${{ env.PRODUCT_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.name }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ast-index-${{ matrix.name }}
-          path: ast-index-${{ env.RELEASE_TAG }}-${{ matrix.name }}.*
+          name: ${{ env.PRODUCT_NAME }}-${{ matrix.name }}
+          path: ${{ env.PRODUCT_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.name }}.*
 
   release:
     name: Create Fork Release
@@ -156,11 +171,12 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           TAG: ${{ env.RELEASE_TAG }}
+          PRODUCT: ${{ env.PRODUCT_NAME }}
         run: |
           for platform in darwin-arm64 darwin-x86_64 linux-x86_64 linux-arm64; do
-            curl -L -o "ast-index-${platform}.tar.gz" \
-              "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-${platform}.tar.gz"
-            hash=$(sha256sum "ast-index-${platform}.tar.gz" | cut -d ' ' -f1)
+            curl -L -o "${PRODUCT}-${platform}.tar.gz" \
+              "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-${platform}.tar.gz"
+            hash=$(sha256sum "${PRODUCT}-${platform}.tar.gz" | cut -d ' ' -f1)
             echo "${platform}=${hash}" >> "$GITHUB_OUTPUT"
           done
 
@@ -175,6 +191,7 @@ jobs:
           REPO: ${{ github.repository }}
           VERSION: ${{ env.RELEASE_VERSION }}
           TAG: ${{ env.RELEASE_TAG }}
+          PRODUCT: ${{ env.PRODUCT_NAME }}
           SHA_DARWIN_ARM64: ${{ steps.sha.outputs.darwin-arm64 }}
           SHA_DARWIN_X86_64: ${{ steps.sha.outputs.darwin-x86_64 }}
           SHA_LINUX_X86_64: ${{ steps.sha.outputs.linux-x86_64 }}
@@ -190,35 +207,30 @@ jobs:
 
             on_macos do
               if Hardware::CPU.arm?
-                url "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-darwin-arm64.tar.gz"
+                url "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-darwin-arm64.tar.gz"
                 sha256 "${SHA_DARWIN_ARM64}"
               else
-                url "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-darwin-x86_64.tar.gz"
+                url "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-darwin-x86_64.tar.gz"
                 sha256 "${SHA_DARWIN_X86_64}"
               end
             end
 
             on_linux do
               if Hardware::CPU.arm?
-                url "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-linux-arm64.tar.gz"
+                url "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-linux-arm64.tar.gz"
                 sha256 "${SHA_LINUX_ARM64}"
               else
-                url "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-linux-x86_64.tar.gz"
+                url "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-linux-x86_64.tar.gz"
                 sha256 "${SHA_LINUX_X86_64}"
               end
             end
 
-            # Conflicts with upstream ast-index because the binary name is the same.
-            # Users must \`brew unlink ast-index\` before installing this fork, or
-            # use \`brew link --overwrite ast-index-av\`.
-            conflicts_with "ast-index", because: "both install \`ast-index\` binary"
-
             def install
-              bin.install "ast-index"
+              bin.install "${PRODUCT}"
             end
 
             test do
-              assert_match "ast-index v${VERSION}", shell_output("#{bin}/ast-index version")
+              assert_match "ast-index v${VERSION}", shell_output("#{bin}/${PRODUCT} version")
             end
           end
           FORMULA
