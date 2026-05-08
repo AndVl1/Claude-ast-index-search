@@ -1,0 +1,275 @@
+name: Fork Release (ast-index-av)
+
+# Manual-only release workflow for the fork.
+#
+# Triggered exclusively via the GitHub Actions UI (workflow_dispatch).
+# Does NOT run on tag pushes — kept independent from the upstream
+# `release.yml` workflow so that syncing tags from upstream cannot
+# accidentally publish a fork release.
+#
+# Branding strategy: the binary is built as `ast-index` (no Cargo.toml
+# drift from upstream — keeps `git pull upstream main` clean) and renamed
+# to `ast-index-av` only at packaging time. The Homebrew formula installs
+# it as `ast-index-av`, so users get a separate command on PATH.
+#
+# Cache isolation: formula installs a wrapper at `bin/ast-index-av` that
+# sets `AST_INDEX_CACHE_NAMESPACE=ast-index-av` before exec'ing the real
+# binary. SQLite cache lands at `~/Library/Caches/ast-index-av/` instead
+# of the upstream `~/Library/Caches/ast-index/`, so schema-incompatible
+# changes on the fork stay isolated. Requires the binary to ship with
+# AST_INDEX_CACHE_NAMESPACE support (PR #3 / commit deb3a6a-equivalent on
+# the fork's main).
+#
+# Known cosmetic limitations:
+#   - `ast-index-av --help` prints `ast-index` (clap command name baked
+#     into source). Acceptable for testing.
+#   - `ast-index-av version` prints the Cargo.toml version (e.g.
+#     `3.40.2`), not the fork release tag (`3.40.2-av.1`). Brew formula
+#     test is lenient accordingly.
+#
+# Prerequisites (one-time setup):
+#   1. Tap repo `AndVl1/homebrew-tap` with a `Formula/` directory
+#      (formula file `Formula/ast-index-av.rb` is created/updated by
+#      this workflow).
+#   2. Add fork repo secret `HOMEBREW_TAP_TOKEN` — a fine-grained PAT
+#      with contents:write on `AndVl1/homebrew-tap`.
+#
+# Usage:
+#   - Run from Actions tab → "Fork Release (ast-index-av)" → Run workflow.
+#   - Provide `version` input as SemVer prerelease, e.g. `3.40.2-av.1`.
+#   - Workflow creates tag `v<version>` (e.g. `v3.40.2-av.1`), uploads
+#     5-platform artifacts named `ast-index-av-...`, creates a GitHub
+#     Release on the fork marked as prerelease, and updates the tap.
+#
+# Install on user machine:
+#   brew tap AndVl1/tap
+#   brew install ast-index-av
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Fork release version, X.Y.Z-av.N (e.g. 3.40.2-av.1). Tag will be v<version>.'
+        required: true
+        type: string
+      dry_run:
+        description: 'Build artifacts but do not create release / push tap'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  # Version input already carries the `-av.N` prerelease suffix
+  # (e.g. 3.40.2-av.1), so the tag is just `v<version>` — no doubling.
+  RELEASE_TAG: v${{ github.event.inputs.version }}
+  RELEASE_VERSION: ${{ github.event.inputs.version }}
+  PRODUCT_NAME: ast-index-av
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check version format
+        run: |
+          if ! echo "${{ env.RELEASE_VERSION }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+-av\.[0-9]+$'; then
+            echo "::error::Invalid version '${{ env.RELEASE_VERSION }}'. Expected X.Y.Z-av.N (SemVer prerelease)."
+            exit 1
+          fi
+          echo "Release tag will be: ${{ env.RELEASE_TAG }}"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            name: darwin-arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            name: darwin-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            name: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            name: linux-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename + package (unix)
+        if: matrix.name != 'windows-x86_64'
+        run: |
+          cd target/${{ matrix.target }}/release
+          cp ast-index ${{ env.PRODUCT_NAME }}
+          tar -czvf ../../../${{ env.PRODUCT_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.name }}.tar.gz ${{ env.PRODUCT_NAME }}
+
+      - name: Rename + package (windows)
+        if: matrix.name == 'windows-x86_64'
+        shell: pwsh
+        run: |
+          Copy-Item "target/${{ matrix.target }}/release/ast-index.exe" "target/${{ matrix.target }}/release/${{ env.PRODUCT_NAME }}.exe"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ env.PRODUCT_NAME }}.exe" -DestinationPath "${{ env.PRODUCT_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.PRODUCT_NAME }}-${{ matrix.name }}
+          path: ${{ env.PRODUCT_NAME }}-${{ env.RELEASE_TAG }}-${{ matrix.name }}.*
+
+  release:
+    name: Create Fork Release
+    needs: build
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git rev-parse "${{ env.RELEASE_TAG }}" >/dev/null 2>&1; then
+            echo "Tag ${{ env.RELEASE_TAG }} already exists, skipping create."
+          else
+            git tag "${{ env.RELEASE_TAG }}" -m "Fork release ${{ env.RELEASE_TAG }}"
+            git push origin "${{ env.RELEASE_TAG }}"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }} (fork)
+          generate_release_notes: true
+          prerelease: true
+          files: artifacts/*
+
+  update-homebrew:
+    name: Update fork Homebrew tap
+    needs: release
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download archives and compute sha256
+        id: sha
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ env.RELEASE_TAG }}
+          PRODUCT: ${{ env.PRODUCT_NAME }}
+        run: |
+          for platform in darwin-arm64 darwin-x86_64 linux-x86_64 linux-arm64; do
+            curl -L -o "${PRODUCT}-${platform}.tar.gz" \
+              "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-${platform}.tar.gz"
+            hash=$(sha256sum "${PRODUCT}-${platform}.tar.gz" | cut -d ' ' -f1)
+            echo "${platform}=${hash}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Checkout fork homebrew tap
+        uses: actions/checkout@v6
+        with:
+          repository: AndVl1/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        env:
+          REPO: ${{ github.repository }}
+          VERSION: ${{ env.RELEASE_VERSION }}
+          TAG: ${{ env.RELEASE_TAG }}
+          PRODUCT: ${{ env.PRODUCT_NAME }}
+          SHA_DARWIN_ARM64: ${{ steps.sha.outputs.darwin-arm64 }}
+          SHA_DARWIN_X86_64: ${{ steps.sha.outputs.darwin-x86_64 }}
+          SHA_LINUX_X86_64: ${{ steps.sha.outputs.linux-x86_64 }}
+          SHA_LINUX_ARM64: ${{ steps.sha.outputs.linux-arm64 }}
+        run: |
+          mkdir -p Formula
+          cat > Formula/ast-index-av.rb << FORMULA
+          class AstIndexAv < Formula
+            desc "ast-index fork (AndVl1) — fast code search CLI with experimental features"
+            homepage "https://github.com/${REPO}"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-darwin-arm64.tar.gz"
+                sha256 "${SHA_DARWIN_ARM64}"
+              else
+                url "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-darwin-x86_64.tar.gz"
+                sha256 "${SHA_DARWIN_X86_64}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-linux-arm64.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              else
+                url "https://github.com/${REPO}/releases/download/${TAG}/${PRODUCT}-${TAG}-linux-x86_64.tar.gz"
+                sha256 "${SHA_LINUX_X86_64}"
+              end
+            end
+
+            def install
+              # Install real binary to libexec, then write a tiny wrapper to
+              # bin/ that sets a fork-specific cache namespace before exec.
+              # Keeps fork's SQLite cache isolated from the upstream binary
+              # (~/Library/Caches/ast-index-av/ vs ~/Library/Caches/ast-index/),
+              # so schema-incompatible changes on the fork can't corrupt
+              # upstream state and vice versa.
+              libexec.install "${PRODUCT}" => "${PRODUCT}-bin"
+              (bin/"${PRODUCT}").write <<~SH
+                #!/bin/bash
+                export AST_INDEX_CACHE_NAMESPACE="\${AST_INDEX_CACHE_NAMESPACE:-${PRODUCT}}"
+                exec "#{libexec}/${PRODUCT}-bin" "\$@"
+              SH
+              (bin/"${PRODUCT}").chmod 0755
+            end
+
+            test do
+              # Binary's baked-in version comes from Cargo.toml (upstream,
+              # e.g. 3.40.2) — not the fork tag (3.40.2-av.N). Just check
+              # the wrapper invokes the binary cleanly.
+              assert_match "ast-index", shell_output("#{bin}/${PRODUCT} version")
+            end
+          end
+          FORMULA
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/ast-index-av.rb
+          git diff --staged --quiet && echo "Formula already up to date" && exit 0
+          git commit -m "Update ast-index-av to ${{ env.RELEASE_TAG }}"
+          git push
