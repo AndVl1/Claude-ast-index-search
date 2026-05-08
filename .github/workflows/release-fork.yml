@@ -20,23 +20,28 @@ name: Fork Release (ast-index-av)
 #     switching versions if you see stale data.
 #
 # Prerequisites (one-time setup):
-#   1. Create empty repo `AndVl1/homebrew-ast-index-av` with `Formula/`
-#      directory.
+#   1. Tap repo `AndVl1/homebrew-tap` with a `Formula/` directory
+#      (formula file `Formula/ast-index-av.rb` is created/updated by
+#      this workflow).
 #   2. Add fork repo secret `HOMEBREW_TAP_TOKEN` — a fine-grained PAT
-#      with contents:write on `AndVl1/homebrew-ast-index-av`.
+#      with contents:write on `AndVl1/homebrew-tap`.
 #
 # Usage:
 #   - Run from Actions tab → "Fork Release (ast-index-av)" → Run workflow.
 #   - Provide `version` input as SemVer prerelease, e.g. `3.40.2-av.1`.
-#   - Workflow creates tag `v<version>-av`, uploads 5-platform artifacts
-#     named `ast-index-av-...`, creates a GitHub Release on the fork
-#     marked as prerelease, and updates the homebrew tap.
+#   - Workflow creates tag `v<version>` (e.g. `v3.40.2-av.1`), uploads
+#     5-platform artifacts named `ast-index-av-...`, creates a GitHub
+#     Release on the fork marked as prerelease, and updates the tap.
+#
+# Install on user machine:
+#   brew tap AndVl1/tap
+#   brew install ast-index-av
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Fork release version (e.g. 3.40.2-av.1). Tag will be v<version>-av.'
+        description: 'Fork release version, X.Y.Z-av.N (e.g. 3.40.2-av.1). Tag will be v<version>.'
         required: true
         type: string
       dry_run:
@@ -46,7 +51,9 @@ on:
         default: false
 
 env:
-  RELEASE_TAG: v${{ github.event.inputs.version }}-av
+  # Version input already carries the `-av.N` prerelease suffix
+  # (e.g. 3.40.2-av.1), so the tag is just `v<version>` — no doubling.
+  RELEASE_TAG: v${{ github.event.inputs.version }}
   RELEASE_VERSION: ${{ github.event.inputs.version }}
   PRODUCT_NAME: ast-index-av
 
@@ -183,7 +190,7 @@ jobs:
       - name: Checkout fork homebrew tap
         uses: actions/checkout@v6
         with:
-          repository: AndVl1/homebrew-ast-index-av
+          repository: AndVl1/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Update formula
