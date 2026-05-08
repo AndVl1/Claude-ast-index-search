@@ -250,3 +250,25 @@ jobs:
           git diff --staged --quiet && echo "Formula already up to date" && exit 0
           git commit -m "Update ast-index-av to ${{ env.RELEASE_TAG }}"
           git push
+
+  update-winget:
+    name: Update Winget Package (best-effort)
+    needs: release
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    runs-on: windows-latest
+    # Fork's winget identifier is unlikely to be registered in
+    # microsoft/winget-pkgs; let the step fail without breaking the run.
+    continue-on-error: true
+    steps:
+      - name: Update winget manifest
+        continue-on-error: true
+        uses: vedantmgoyal9/winget-releaser@main
+        with:
+          identifier: AndVl1.ast-index-av
+          version: ${{ env.RELEASE_VERSION }}
+          installers-regex: 'windows-x86_64\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}
+
+      - name: Note on failure
+        if: failure()
+        run: echo "Winget submission failed (non-fatal). Identifier may need registration in microsoft/winget-pkgs first."
