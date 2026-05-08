@@ -1,0 +1,233 @@
+name: Fork Release (ast-index-av)
+
+# Manual-only release workflow for the fork.
+#
+# Triggered exclusively via the GitHub Actions UI (workflow_dispatch).
+# Does NOT run on tag pushes — kept independent from the upstream
+# `release.yml` workflow so that syncing tags from upstream cannot
+# accidentally publish a fork release.
+#
+# Prerequisites (one-time setup):
+#   1. Create empty repo `AndVl1/homebrew-ast-index-av` with `Formula/`
+#      directory.
+#   2. Add fork repo secret `HOMEBREW_TAP_TOKEN` — a fine-grained PAT
+#      with contents:write on `AndVl1/homebrew-ast-index-av`.
+#   3. (Optional) Add `NPM_TOKEN` if NPM publishing is later enabled.
+#
+# Usage:
+#   - Run from Actions tab → "Fork Release (ast-index-av)" → Run workflow.
+#   - Provide `version` input, e.g. `3.40.2-av.1`.
+#   - Workflow creates tag `v<version>-av`, uploads 5-platform artifacts,
+#     creates a GitHub Release on the fork, and updates the homebrew tap.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Fork release version (e.g. 3.40.2-av.1). Tag will be v<version>-av.'
+        required: true
+        type: string
+      dry_run:
+        description: 'Build artifacts but do not create release / push tap'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  RELEASE_TAG: v${{ github.event.inputs.version }}-av
+  RELEASE_VERSION: ${{ github.event.inputs.version }}
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check version format
+        run: |
+          if ! echo "${{ env.RELEASE_VERSION }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid version '${{ env.RELEASE_VERSION }}'. Expected SemVer X.Y.Z[-prerelease]."
+            exit 1
+          fi
+          echo "Release tag will be: ${{ env.RELEASE_TAG }}"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: validate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            name: darwin-arm64
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            name: darwin-x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            name: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            name: linux-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x86_64
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.name != 'windows-x86_64'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../ast-index-${{ env.RELEASE_TAG }}-${{ matrix.name }}.tar.gz ast-index
+
+      - name: Package (windows)
+        if: matrix.name == 'windows-x86_64'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/ast-index.exe" -DestinationPath "ast-index-${{ env.RELEASE_TAG }}-${{ matrix.name }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ast-index-${{ matrix.name }}
+          path: ast-index-${{ env.RELEASE_TAG }}-${{ matrix.name }}.*
+
+  release:
+    name: Create Fork Release
+    needs: build
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git rev-parse "${{ env.RELEASE_TAG }}" >/dev/null 2>&1; then
+            echo "Tag ${{ env.RELEASE_TAG }} already exists, skipping create."
+          else
+            git tag "${{ env.RELEASE_TAG }}" -m "Fork release ${{ env.RELEASE_TAG }}"
+            git push origin "${{ env.RELEASE_TAG }}"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }} (fork)
+          generate_release_notes: true
+          prerelease: true
+          files: artifacts/*
+
+  update-homebrew:
+    name: Update fork Homebrew tap
+    needs: release
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download archives and compute sha256
+        id: sha
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          for platform in darwin-arm64 darwin-x86_64 linux-x86_64 linux-arm64; do
+            curl -L -o "ast-index-${platform}.tar.gz" \
+              "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-${platform}.tar.gz"
+            hash=$(sha256sum "ast-index-${platform}.tar.gz" | cut -d ' ' -f1)
+            echo "${platform}=${hash}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Checkout fork homebrew tap
+        uses: actions/checkout@v6
+        with:
+          repository: AndVl1/homebrew-ast-index-av
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        env:
+          REPO: ${{ github.repository }}
+          VERSION: ${{ env.RELEASE_VERSION }}
+          TAG: ${{ env.RELEASE_TAG }}
+          SHA_DARWIN_ARM64: ${{ steps.sha.outputs.darwin-arm64 }}
+          SHA_DARWIN_X86_64: ${{ steps.sha.outputs.darwin-x86_64 }}
+          SHA_LINUX_X86_64: ${{ steps.sha.outputs.linux-x86_64 }}
+          SHA_LINUX_ARM64: ${{ steps.sha.outputs.linux-arm64 }}
+        run: |
+          mkdir -p Formula
+          cat > Formula/ast-index-av.rb << FORMULA
+          class AstIndexAv < Formula
+            desc "ast-index fork (AndVl1) — fast code search CLI with experimental features"
+            homepage "https://github.com/${REPO}"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-darwin-arm64.tar.gz"
+                sha256 "${SHA_DARWIN_ARM64}"
+              else
+                url "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-darwin-x86_64.tar.gz"
+                sha256 "${SHA_DARWIN_X86_64}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-linux-arm64.tar.gz"
+                sha256 "${SHA_LINUX_ARM64}"
+              else
+                url "https://github.com/${REPO}/releases/download/${TAG}/ast-index-${TAG}-linux-x86_64.tar.gz"
+                sha256 "${SHA_LINUX_X86_64}"
+              end
+            end
+
+            # Conflicts with upstream ast-index because the binary name is the same.
+            # Users must \`brew unlink ast-index\` before installing this fork, or
+            # use \`brew link --overwrite ast-index-av\`.
+            conflicts_with "ast-index", because: "both install \`ast-index\` binary"
+
+            def install
+              bin.install "ast-index"
+            end
+
+            test do
+              assert_match "ast-index v${VERSION}", shell_output("#{bin}/ast-index version")
+            end
+          end
+          FORMULA
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/ast-index-av.rb
+          git diff --staged --quiet && echo "Formula already up to date" && exit 0
+          git commit -m "Update ast-index-av to ${{ env.RELEASE_TAG }}"
+          git push
