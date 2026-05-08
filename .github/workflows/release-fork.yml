@@ -19,10 +19,12 @@ name: Fork Release (ast-index-av)
 # changes on the fork stay isolated.
 #
 # Versioning: workflow reads the SemVer base from `Cargo.toml` (e.g.
-# `3.40.2`) and appends `-av.<counter>` from the input. Final tag is
-# `v<base>-av.<counter>` — bump the counter for each fork release on
-# the same upstream base; bump Cargo.toml (via upstream sync) when you
-# move to a newer base.
+# `3.40.4`) and appends `-av.<counter>`. Counter is auto-managed by
+# `einaregilsson/build-number@v3` — stored in repo refs and incremented
+# per run, monotonic across all fork releases (no resets when base bumps,
+# never collides with a prior tag). Optional `counter_override` input
+# pins a specific N (skips auto-increment); useful for re-running a
+# failed release on the same tag.
 #
 # Known cosmetic limitations:
 #   - `ast-index-av --help` prints `ast-index` (clap command name baked
@@ -40,9 +42,10 @@ name: Fork Release (ast-index-av)
 #
 # Usage:
 #   - Run from Actions tab → "Fork Release (ast-index-av)" → Run workflow.
-#   - Provide `counter` input (positive integer, e.g. `1`, `2`, …).
+#   - Counter auto-increments. Optionally pass `counter_override` to pin
+#     a specific N (e.g. to retry a failed release).
 #   - Workflow derives `version = <Cargo.toml-version>-av.<counter>`
-#     and creates tag `v<version>` (e.g. `v3.40.2-av.1`), uploads
+#     and creates tag `v<version>` (e.g. `v3.40.4-av.1`), uploads
 #     5-platform artifacts named `ast-index-av-...`, creates a GitHub
 #     Release on the fork marked as prerelease, and updates the tap.
 #
@@ -53,11 +56,11 @@ name: Fork Release (ast-index-av)
 on:
   workflow_dispatch:
     inputs:
-      counter:
-        description: 'Prerelease counter N (positive int). Final version = <Cargo.toml-version>-av.<N>.'
-        required: true
+      counter_override:
+        description: 'Optional. Pin counter N (positive int). Empty = auto-increment via einaregilsson/build-number.'
+        required: false
         type: string
-        default: '1'
+        default: ''
       dry_run:
         description: 'Build artifacts but do not create release / push tap'
         required: false
@@ -80,12 +83,29 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Auto-increment build number
+        id: buildnumber
+        if: ${{ github.event.inputs.counter_override == '' }}
+        uses: einaregilsson/build-number@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          prefix: ast-index-av
+
       - name: Derive version from Cargo.toml + counter
         id: derive
+        env:
+          OVERRIDE: ${{ github.event.inputs.counter_override }}
+          AUTO_COUNTER: ${{ steps.buildnumber.outputs.build_number }}
         run: |
-          counter='${{ github.event.inputs.counter }}'
+          if [ -n "$OVERRIDE" ]; then
+            counter="$OVERRIDE"
+            source="override"
+          else
+            counter="$AUTO_COUNTER"
+            source="auto (einaregilsson/build-number)"
+          fi
           if ! echo "$counter" | grep -qE '^[0-9]+$'; then
-            echo "::error::Counter must be a positive integer (got '$counter')."
+            echo "::error::Counter must be a positive integer (got '$counter' from $source)."
             exit 1
           fi
           base=$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' Cargo.toml)
@@ -97,7 +117,7 @@ jobs:
           tag="v${version}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Resolved: base=$base counter=$counter version=$version tag=$tag"
+          echo "Resolved: base=$base counter=$counter source=$source version=$version tag=$tag"
 
   build:
     name: Build ${{ matrix.name }}
