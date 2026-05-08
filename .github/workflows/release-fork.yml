@@ -12,12 +12,20 @@ name: Fork Release (ast-index-av)
 # to `ast-index-av` only at packaging time. The Homebrew formula installs
 # it as `ast-index-av`, so users get a separate command on PATH.
 #
+# Cache isolation: formula installs a wrapper at `bin/ast-index-av` that
+# sets `AST_INDEX_CACHE_NAMESPACE=ast-index-av` before exec'ing the real
+# binary. SQLite cache lands at `~/Library/Caches/ast-index-av/` instead
+# of the upstream `~/Library/Caches/ast-index/`, so schema-incompatible
+# changes on the fork stay isolated. Requires the binary to ship with
+# AST_INDEX_CACHE_NAMESPACE support (PR #3 / commit deb3a6a-equivalent on
+# the fork's main).
+#
 # Known cosmetic limitations:
 #   - `ast-index-av --help` prints `ast-index` (clap command name baked
 #     into source). Acceptable for testing.
-#   - Cache dir `~/Library/Caches/ast-index/` is shared with upstream.
-#     SQLite schema is normally compatible, but rebuild the index after
-#     switching versions if you see stale data.
+#   - `ast-index-av version` prints the Cargo.toml version (e.g.
+#     `3.40.2`), not the fork release tag (`3.40.2-av.1`). Brew formula
+#     test is lenient accordingly.
 #
 # Prerequisites (one-time setup):
 #   1. Tap repo `AndVl1/homebrew-tap` with a `Formula/` directory
@@ -233,11 +241,26 @@ jobs:
             end
 
             def install
-              bin.install "${PRODUCT}"
+              # Install real binary to libexec, then write a tiny wrapper to
+              # bin/ that sets a fork-specific cache namespace before exec.
+              # Keeps fork's SQLite cache isolated from the upstream binary
+              # (~/Library/Caches/ast-index-av/ vs ~/Library/Caches/ast-index/),
+              # so schema-incompatible changes on the fork can't corrupt
+              # upstream state and vice versa.
+              libexec.install "${PRODUCT}" => "${PRODUCT}-bin"
+              (bin/"${PRODUCT}").write <<~SH
+                #!/bin/bash
+                export AST_INDEX_CACHE_NAMESPACE="\${AST_INDEX_CACHE_NAMESPACE:-${PRODUCT}}"
+                exec "#{libexec}/${PRODUCT}-bin" "\$@"
+              SH
+              (bin/"${PRODUCT}").chmod 0755
             end
 
             test do
-              assert_match "ast-index v${VERSION}", shell_output("#{bin}/${PRODUCT} version")
+              # Binary's baked-in version comes from Cargo.toml (upstream,
+              # e.g. 3.40.2) — not the fork tag (3.40.2-av.N). Just check
+              # the wrapper invokes the binary cleanly.
+              assert_match "ast-index", shell_output("#{bin}/${PRODUCT} version")
             end
           end
           FORMULA
